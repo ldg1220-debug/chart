@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chart Sentinel</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg0: #0d1117; --bg1: #161b22; --bg2: #21262d;
+      --border: #30363d; --text: #e6edf3; --text2: #8b949e;
+      --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
+      --amber: #f59e0b; --purple: #a855f7;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg0); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+    button { cursor: pointer; border: none; font-family: inherit; }
+    input, textarea { font-family: inherit; }
+
+    /* 레이아웃 */
+    .app { display: flex; flex-direction: column; min-height: 100vh; }
+    .header { background: var(--bg1); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
+    .logo { font-size: 18px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
+    .logo-icon { width: 28px; height: 28px; background: linear-gradient(135deg, var(--blue), var(--purple)); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    .api-status { font-size: 12px; padding: 4px 10px; border-radius: 20px; border: 1px solid; }
+    .api-ok  { color: var(--green);  border-color: var(--green);  background: rgba(34,197,94,.08); }
+    .api-bad { color: var(--amber); border-color: var(--amber); background: rgba(245,158,11,.08); }
+    .btn-ghost { background: transparent; color: var(--text2); font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); transition: all .15s; }
+    .btn-ghost:hover { background: var(--bg2); color: var(--text); }
+
+    /* 탭 */
+    .tabs { background: var(--bg1); border-bottom: 1px solid var(--border); display: flex; padding: 0 24px; }
+    .tab { padding: 12px 20px; font-size: 14px; color: var(--text2); background: transparent; border-bottom: 2px solid transparent; transition: all .15s; }
+    .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+    .tab:hover:not(.active) { color: var(--text); }
+
+    /* 메인 */
+    .main { flex: 1; padding: 24px; max-width: 1280px; margin: 0 auto; width: 100%; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+
+    /* 카드 */
+    .card { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 16px; }
+
+    /* 검색바 */
+    .search-wrap { display: flex; gap: 8px; margin-bottom: 20px; }
+    .search-input { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; outline: none; transition: border-color .15s; }
+    .search-input:focus { border-color: var(--blue); }
+    .search-input::placeholder { color: var(--text2); }
+    .btn-primary { background: var(--blue); color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; transition: opacity .15s; white-space: nowrap; }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* 모드 토글 */
+    .mode-toggle { display: flex; background: var(--bg2); border-radius: 8px; padding: 3px; margin-bottom: 16px; width: fit-content; }
+    .mode-btn { padding: 6px 16px; border-radius: 6px; font-size: 13px; color: var(--text2); background: transparent; transition: all .15s; }
+    .mode-btn.active { background: var(--bg1); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+
+    /* 드롭존 */
+    .dropzone { border: 2px dashed var(--border); border-radius: 10px; padding: 40px; text-align: center; transition: all .2s; cursor: pointer; }
+    .dropzone:hover, .dropzone.drag { border-color: var(--blue); background: rgba(59,130,246,.04); }
+    .dropzone-icon { font-size: 32px; margin-bottom: 12px; }
+    .dropzone-text { color: var(--text2); font-size: 14px; }
+    .dropzone-hint { color: var(--text2); font-size: 12px; margin-top: 6px; }
+    .preview-img { width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+
+    /* 로더 */
+    .loader-wrap { padding: 40px; text-align: center; }
+    .loader-spinner { width: 36px; height: 36px; border: 3px solid var(--bg2); border-top-color: var(--blue); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px; }
+    .loader-steps { display: flex; flex-direction: column; gap: 8px; text-align: left; max-width: 260px; margin: 20px auto 0; }
+    .loader-step { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text2); }
+    .step-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bg2); flex-shrink: 0; }
+    .step-dot.done { background: var(--green); }
+    .step-dot.active { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
+    @keyframes spin  { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+
+    /* 에러 */
+    .error-card { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); border-radius: 8px; padding: 16px; color: var(--red); font-size: 14px; }
+
+    /* 리포트 */
+    .report-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+    .report-name { font-size: 20px; font-weight: 700; }
+    .report-ticker { color: var(--text2); font-size: 13px; margin-top: 2px; }
+    .report-price { font-size: 24px; font-weight: 700; color: var(--green); }
+
+    .strategy-box { border-radius: 8px; padding: 16px; margin-bottom: 16px; border-left: 4px solid; }
+    .pos-buy  { border-color: var(--green); background: rgba(34,197,94,.06); }
+    .pos-sell { border-color: var(--red);   background: rgba(239,68,68,.06); }
+    .pos-hold { border-color: var(--amber); background: rgba(245,158,11,.06); }
+
+    .pos-badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
+    .badge-buy  { background: var(--green); color: #fff; }
+    .badge-sell { background: var(--red);   color: #fff; }
+    .badge-hold { background: var(--amber); color: #000; }
+
+    .confidence-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .confidence-bar { flex: 1; height: 6px; background: var(--bg2); border-radius: 3px; overflow: hidden; }
+    .confidence-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--blue), var(--purple)); transition: width .5s ease; }
+    .confidence-label { font-size: 12px; color: var(--text2); white-space: nowrap; }
+
+    .strategy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
+    .sg-label { color: var(--text2); }
+    .sg-value { color: var(--text); font-weight: 500; }
+
+    .section-title { font-size: 13px; font-weight: 600; color: var(--text2); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: .04em; }
+    .section-text  { font-size: 14px; color: var(--text); line-height: 1.6; }
+
+    .wl-buttons { display: flex; gap: 8px; margin-top: 16px; }
+    .btn-win  { flex: 1; padding: 8px; border-radius: 6px; font-size: 13px; font-weight: 600; background: rgba(34,197,94,.12); color: var(--green); border: 1px solid rgba(34,197,94,.3); transition: all .15s; }
+    .btn-loss { flex: 1; padding: 8px; border-radius: 6px; font-size: 13px; font-weight: 600; background: rgba(239,68,68,.12); color: var(--red);   border: 1px solid rgba(239,68,68,.3); transition: all .15s; }
+    .btn-win:hover  { background: rgba(34,197,94,.22); }
+    .btn-loss:hover { background: rgba(239,68,68,.22); }
+    .btn-win:disabled, .btn-loss:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* 성과 탭 */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    @media (max-width: 700px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+    .stat-card { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .stat-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+    .stat-value { font-size: 24px; font-weight: 700; }
+    .stat-sub   { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+    .log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .log-table th { text-align: left; padding: 8px 12px; color: var(--text2); font-weight: 500; border-bottom: 1px solid var(--border); }
+    .log-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .log-table tr:last-child td { border-bottom: none; }
+    .log-table tr:hover td { background: var(--bg2); }
+    .result-badge { display: inline-flex; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .rb-win     { background: rgba(34,197,94,.15);  color: var(--green); }
+    .rb-loss    { background: rgba(239,68,68,.15);  color: var(--red); }
+    .rb-pending { background: rgba(139,148,158,.15); color: var(--text2); }
+    .wl-sm { display: flex; gap: 4px; }
+    .wl-sm button { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .wl-sm .bw { background: rgba(34,197,94,.12); color: var(--green); border: 1px solid rgba(34,197,94,.25); }
+    .wl-sm .bl { background: rgba(239,68,68,.12);  color: var(--red);   border: 1px solid rgba(239,68,68,.25); }
+
+    /* 포지션 분포 */
+    .pos-dist { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    .pos-bar-wrap { flex: 1; min-width: 120px; }
+    .pos-bar-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .pos-bar-track { height: 6px; background: var(--bg2); border-radius: 3px; overflow: hidden; }
+    .pos-bar-fill  { height: 100%; border-radius: 3px; transition: width .5s; }
+
+    /* 모니터 탭 */
+    .watchlist-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .watchlist-row:last-child { border-bottom: none; }
+    .btn-danger { background: rgba(239,68,68,.12); color: var(--red); border: 1px solid rgba(239,68,68,.25); padding: 4px 10px; border-radius: 6px; font-size: 12px; transition: all .15s; }
+    .btn-danger:hover { background: rgba(239,68,68,.22); }
+    .monitor-status { display: flex; align-items: center; gap: 8px; padding: 12px 0; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .status-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s ease-in-out infinite; }
+    .status-dot.off { background: var(--text2); }
+
+    /* 모달 */
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; z-index: 100; }
+    .modal    { background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 28px; width: 90%; max-width: 440px; }
+    .modal h2 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .modal p  { font-size: 14px; color: var(--text2); margin-bottom: 20px; line-height: 1.5; }
+    .modal-input { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; outline: none; margin-bottom: 12px; transition: border-color .15s; }
+    .modal-input:focus { border-color: var(--blue); }
+    .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+    /* TradingView */
+    .tv-container { width: 100%; height: 420px; background: var(--bg2); border-radius: 8px; overflow: hidden; }
+
+    /* 빈 상태 */
+    .empty { text-align: center; padding: 48px 20px; color: var(--text2); }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; }
+    .empty-text { font-size: 14px; }
+
+    /* 퀵 버튼 */
+    .quick-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .quick-btn { background: var(--bg2); border: 1px solid var(--border); color: var(--text2); padding: 6px 12px; border-radius: 6px; font-size: 12px; transition: all .15s; }
+    .quick-btn:hover { background: var(--bg1); color: var(--text); border-color: var(--blue); }
+
+    /* 차트 이미지 */
+    .chart-img-wrap { margin-top: 12px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+    .chart-img-wrap img { width: 100%; display: block; }
+
+    /* 스크롤 */
+    .scroll-area { overflow-y: auto; max-height: 400px; }
+    .scroll-area::-webkit-scrollbar { width: 4px; }
+    .scroll-area::-webkit-scrollbar-track { background: transparent; }
+    .scroll-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── 상수 ──────────────────────────────────────────────────────────────────────
+const QUICK_TICKERS = ["NVDA", "AAPL", "TSLA", "BTC", "ETH", "삼성전자"];
+const BASE_URL = (() => {
+  if (window.location.protocol === "file:") return null;
+  return window.location.origin;
+})();
+const ANTHROPIC_DIRECT = "https://api.anthropic.com/v1/messages";
+
+// ── 유틸 ──────────────────────────────────────────────────────────────────────
+function ls_get(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+}
+function ls_set(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+function positionClass(pos) {
+  if (!pos) return "pos-hold";
+  const p = pos.toLowerCase();
+  if (p.includes("매수") || p === "buy" || p === "long") return "pos-buy";
+  if (p.includes("매도") || p === "sell" || p === "short") return "pos-sell";
+  return "pos-hold";
+}
+function badgeClass(pos) {
+  const c = positionClass(pos);
+  return c === "pos-buy" ? "badge-buy" : c === "pos-sell" ? "badge-sell" : "badge-hold";
+}
+
+// ── TradingView 위젯 ──────────────────────────────────────────────────────────
+function TradingViewWidget({ symbol }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!symbol || !ref.current) return;
+    ref.current.innerHTML = "";
+    const s = document.createElement("script");
+    s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    s.async = true;
+    s.innerHTML = JSON.stringify({
+      symbol, interval: "D", theme: "dark", style: "1",
+      locale: "kr", width: "100%", height: 400,
+      hide_side_toolbar: false, allow_symbol_change: true,
+    });
+    ref.current.appendChild(s);
+  }, [symbol]);
+  return <div ref={ref} className="tv-container" />;
+}
+
+// ── 이미지 드롭존 ─────────────────────────────────────────────────────────────
+function ImageDropzone({ onFile, preview }) {
+  const [drag, setDrag] = useState(false);
+  const inputRef = useRef(null);
+
+  const handleFile = (f) => { if (f && f.type.startsWith("image/")) onFile(f); };
+  const onDrop = (e) => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); };
+
+  return preview ? (
+    <div>
+      <img src={preview} alt="업로드 이미지" className="preview-img" />
+      <button className="btn-ghost" style={{marginTop:8,fontSize:12}} onClick={() => onFile(null)}>다른 이미지 선택</button>
+    </div>
+  ) : (
+    <div
+      className={`dropzone${drag ? " drag" : ""}`}
+      onDragOver={e => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={onDrop}
+      onClick={() => inputRef.current?.click()}
+    >
+      <div className="dropzone-icon">📊</div>
+      <div className="dropzone-text">차트 이미지를 드래그하거나 클릭하여 업로드</div>
+      <div className="dropzone-hint">PNG, JPG, WebP 지원</div>
+      <input ref={inputRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e => handleFile(e.target.files[0])} />
+    </div>
+  );
+}
+
+// ── 로더 ─────────────────────────────────────────────────────────────────────
+function Loader({ step }) {
+  const steps = ["데이터 수집 중...", "차트 분석 중...", "AI 리포트 생성 중..."];
+  return (
+    <div className="loader-wrap">
+      <div className="loader-spinner" />
+      <div style={{color:"var(--text2)",fontSize:14}}>{steps[step] || "분석 중..."}</div>
+      <div className="loader-steps">
+        {steps.map((s, i) => (
+          <div key={i} className="loader-step">
+            <div className={`step-dot ${i < step ? "done" : i === step ? "active" : ""}`} />
+            <span style={{color: i < step ? "var(--green)" : i === step ? "var(--text)" : "var(--text2)"}}>{s}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 리포트 카드 ───────────────────────────────────────────────────────────────
+function ReportCard({ report, chartImage, logId, onResult }) {
+  const tech = report.technical_analysis || {};
+  const fund = report.fundamental_analysis || {};
+  const strat = report.strategy || {};
+  const posClass = positionClass(strat.position);
+  const bClass   = badgeClass(strat.position);
+  const conf = parseInt(strat.confidence) || 0;
+
+  return (
+    <div>
+      <div className="report-header">
+        <div>
+          <div className="report-name">{report.name || report.ticker}</div>
+          <div className="report-ticker">{report.ticker} · {report.timeframe}</div>
+        </div>
+        <div className="report-price">{report.current_price}</div>
+      </div>
+
+      {chartImage && (
+        <div className="chart-img-wrap">
+          <img src={`data:image/png;base64,${chartImage}`} alt="분석 차트" />
+        </div>
+      )}
+
+      <div className={`strategy-box ${posClass}`} style={{marginTop:16}}>
+        <div className={`pos-badge ${bClass}`}>{strat.position || "관망"}</div>
+        <div className="confidence-row">
+          <div className="confidence-bar">
+            <div className="confidence-fill" style={{width:`${conf*10}%`}} />
+          </div>
+          <span className="confidence-label">확신도 {conf}/10</span>
+        </div>
+        <div className="strategy-grid">
+          <span className="sg-label">진입</span><span className="sg-value">{strat.entry_zone || "-"}</span>
+          <span className="sg-label">손절</span><span className="sg-value">{strat.stop_loss || "-"}</span>
+          <span className="sg-label">목표1</span><span className="sg-value">{(strat.target_prices||[])[0]||"-"}</span>
+          <span className="sg-label">목표2</span><span className="sg-value">{(strat.target_prices||[])[1]||"-"}</span>
+          <span className="sg-label">R/R</span><span className="sg-value">{strat.risk_reward||"-"}</span>
+        </div>
+        {strat.rationale && <div style={{marginTop:10,fontSize:13,color:"var(--text2)",lineHeight:1.5}}>{strat.rationale}</div>}
+      </div>
+
+      <div className="section-title">기술적 분석</div>
+      <div className="section-text">{tech.summary || "-"}</div>
+      {tech.trend && <div style={{marginTop:6,fontSize:13,color:"var(--text2)"}}>추세: {tech.trend} · 지지: {tech.support} · 저항: {tech.resistance}</div>}
+
+      <div className="section-title">기본적 분석</div>
+      <div className="section-text">{fund.summary || "-"}</div>
+      {fund.news_sentiment && <div style={{marginTop:6,fontSize:13,color:"var(--text2)"}}>뉴스 감성: {fund.news_sentiment}</div>}
+
+      {onResult && (
+        <div className="wl-buttons">
+          <button className="btn-win"  onClick={() => onResult("win")}>✓ 수익 (Win)</button>
+          <button className="btn-loss" onClick={() => onResult("loss")}>✗ 손실 (Loss)</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 성과 탭 ───────────────────────────────────────────────────────────────────
+function PerformanceTab({ logs, onUpdateResult }) {
+  const evaluated = logs.filter(l => l.result === "win" || l.result === "loss");
+  const wins  = evaluated.filter(l => l.result === "win").length;
+  const winRate = evaluated.length ? Math.round(wins / evaluated.length * 100) : 0;
+  const confidences = logs.map(l => parseFloat(l.confidence)).filter(c => !isNaN(c));
+  const avgConf = confidences.length ? (confidences.reduce((a,b)=>a+b,0)/confidences.length).toFixed(1) : "0.0";
+
+  const positions = {};
+  logs.forEach(l => {
+    const p = l.position || "기타";
+    positions[p] = positions[p] || { count: 0, wins: 0 };
+    positions[p].count++;
+    if (l.result === "win") positions[p].wins++;
+  });
+  const posColors = { "매수": "var(--green)", "buy": "var(--green)", "long": "var(--green)", "매도": "var(--red)", "sell": "var(--red)", "관망": "var(--amber)", "hold": "var(--amber)" };
+
+  return (
+    <div>
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">총 분석</div>
+          <div className="stat-value">{logs.length}</div>
+          <div className="stat-sub">전체 기록</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">평가 완료</div>
+          <div className="stat-value">{evaluated.length}</div>
+          <div className="stat-sub">{logs.length - evaluated.length}개 대기</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">승률</div>
+          <div className="stat-value" style={{color: winRate >= 50 ? "var(--green)" : "var(--red)"}}>{winRate}%</div>
+          <div className="stat-sub">{wins}승 {evaluated.length - wins}패</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">평균 확신도</div>
+          <div className="stat-value" style={{color:"var(--blue)"}}>{avgConf}</div>
+          <div className="stat-sub">/ 10</div>
+        </div>
+      </div>
+
+      {Object.keys(positions).length > 0 && (
+        <div className="card" style={{marginBottom:20}}>
+          <div className="card-title">포지션 분포</div>
+          <div className="pos-dist">
+            {Object.entries(positions).map(([p, d]) => (
+              <div key={p} className="pos-bar-wrap">
+                <div className="pos-bar-label">
+                  <span>{p}</span>
+                  <span>{d.count}건</span>
+                </div>
+                <div className="pos-bar-track">
+                  <div className="pos-bar-fill" style={{
+                    width: `${Math.round(d.count/logs.length*100)}%`,
+                    background: posColors[p.toLowerCase()] || "var(--blue)"
+                  }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-title">최근 분석 기록</div>
+        {logs.length === 0 ? (
+          <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">아직 분석 기록이 없습니다</div></div>
+        ) : (
+          <div className="scroll-area">
+            <table className="log-table">
+              <thead>
+                <tr>
+                  <th>종목</th><th>포지션</th><th>확신도</th>
+                  <th>진입가</th><th>날짜</th><th>결과</th><th>마킹</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.map(l => (
+                  <tr key={l.id}>
+                    <td><strong>{l.ticker}</strong></td>
+                    <td><span className={`pos-badge ${badgeClass(l.position)}`} style={{fontSize:11,padding:"2px 8px"}}>{l.position||"-"}</span></td>
+                    <td>{l.confidence||"-"}</td>
+                    <td style={{fontSize:12,color:"var(--text2)"}}>{l.entry_zone||"-"}</td>
+                    <td style={{fontSize:11,color:"var(--text2)"}}>{l.timestamp ? new Date(l.timestamp).toLocaleDateString("ko") : "-"}</td>
+                    <td>
+                      <span className={`result-badge ${l.result==="win"?"rb-win":l.result==="loss"?"rb-loss":"rb-pending"}`}>
+                        {l.result==="win"?"✓ Win":l.result==="loss"?"✗ Loss":"대기"}
+                      </span>
+                    </td>
+                    <td>
+                      {l.result === "pending" && (
+                        <div className="wl-sm">
+                          <button className="bw" onClick={() => onUpdateResult(l.id, "win")}>W</button>
+                          <button className="bl" onClick={() => onUpdateResult(l.id, "loss")}>L</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 모니터 탭 ─────────────────────────────────────────────────────────────────
+function MonitorTab({ watchlist, onAdd, onRemove, monitoring, onToggleMonitor }) {
+  const [input, setInput] = useState("");
+
+  const handleAdd = () => {
+    const t = input.trim();
+    if (!t) return;
+    onAdd(t);
+    setInput("");
+  };
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">워치리스트</div>
+        <div className="search-wrap">
+          <input className="search-input" placeholder="종목 추가 (예: AAPL, BTC, 삼성전자)"
+            value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleAdd()} />
+          <button className="btn-primary" onClick={handleAdd}>추가</button>
+        </div>
+        {watchlist.length === 0 ? (
+          <div className="empty" style={{padding:"24px 0"}}>
+            <div className="empty-icon">👁</div>
+            <div className="empty-text">모니터링할 종목을 추가하세요</div>
+          </div>
+        ) : (
+          watchlist.map(item => (
+            <div key={item.ticker} className="watchlist-row">
+              <div>
+                <div style={{fontWeight:600}}>{item.ticker}</div>
+                <div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>{item.name}</div>
+              </div>
+              <button className="btn-danger" onClick={() => onRemove(item.ticker)}>제거</button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-title">자동 모니터</div>
+        <div className="monitor-status">
+          <div className={`status-dot ${monitoring ? "on" : "off"}`} />
+          <span style={{fontSize:14}}>{monitoring ? "모니터링 실행 중 (60분 주기)" : "모니터링 중지됨"}</span>
+        </div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16,lineHeight:1.5}}>
+          워치리스트 종목을 주기적으로 분석하고, 매수 신호 감지 시 텔레그램으로 알림을 발송합니다.
+          (백엔드 서버 연결 필요)
+        </div>
+        <button
+          className="btn-primary"
+          style={{background: monitoring ? "var(--red)" : "var(--green)"}}
+          onClick={onToggleMonitor}
+        >
+          {monitoring ? "⏹ 모니터 중지" : "▶ 모니터 시작"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── API 키 모달 ───────────────────────────────────────────────────────────────
+function ApiKeyModal({ onSave }) {
+  const [key, setKey] = useState("");
+  return (
+    <div className="modal-bg">
+      <div className="modal">
+        <h2>🛡 Chart Sentinel</h2>
+        <p>
+          AI 기반 차트 분석을 시작하려면 Anthropic API 키가 필요합니다.<br />
+          키는 브라우저 로컬에만 저장되며 외부로 전송되지 않습니다.
+        </p>
+        <input className="modal-input" type="password" placeholder="sk-ant-api03-..."
+          value={key} onChange={e => setKey(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && key.startsWith("sk-") && onSave(key)} />
+        <div style={{fontSize:12,color:"var(--text2)"}}>
+          백엔드 서버(localhost:8000)가 실행 중이면 API 키 없이도 서버의 키를 사용합니다.
+        </div>
+        <div className="modal-footer">
+          <button className="btn-ghost" onClick={() => onSave("")}>나중에 설정</button>
+          <button className="btn-primary" onClick={() => onSave(key)} disabled={!key.startsWith("sk-ant") && key !== ""}>저장</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 직접 Anthropic API 호출 (독립 실행 모드) ──────────────────────────────────
+async function analyzeDirectly(query, apiKey) {
+  const prompt = `당신은 전문 금융 분석가입니다. "${query}" 종목/자산에 대해 현재 시장 상황을 기반으로 종합 분석을 수행하세요.
+
+아래 JSON 스키마를 정확히 따라 응답하세요 (JSON 외 텍스트 금지):
+
+{
+  "ticker": "${query.toUpperCase()}",
+  "name": "종목명",
+  "timeframe": "일봉",
+  "current_price": "현재가 (알 수 없으면 N/A)",
+  "technical_analysis": {
+    "trend": "추세 분석",
+    "support": "지지선",
+    "resistance": "저항선",
+    "indicators": "기술적 지표",
+    "pattern": "차트 패턴",
+    "summary": "기술적 분석 요약"
+  },
+  "fundamental_analysis": {
+    "news_sentiment": "뉴스 감성",
+    "key_catalysts": "주요 촉매",
+    "macro_impact": "매크로 영향",
+    "summary": "기본적 분석 요약"
+  },
+  "strategy": {
+    "position": "매수 또는 매도 또는 관망",
+    "entry_zone": "진입 구간",
+    "stop_loss": "손절 기준",
+    "target_prices": ["1차 목표", "2차 목표"],
+    "risk_reward": "리스크/리워드",
+    "confidence": 6,
+    "rationale": "전략 근거"
+  }
+}`;
+
+  const resp = await fetch(ANTHROPIC_DIRECT, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: "claude-opus-4-20250514",
+      max_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json();
+    throw new Error(err.error?.message || `API 오류 ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  let raw = data.content[0].text.trim();
+  if (raw.includes("```")) raw = raw.split("```json").pop().split("```")[0].trim();
+  return JSON.parse(raw);
+}
+
+// ── 메인 앱 ───────────────────────────────────────────────────────────────────
+function App() {
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [apiKey, setApiKey] = useState(() => ls_get("cs_api_key", ""));
+  const [logs, setLogs] = useState(() => ls_get("cs_logs", []));
+  const [watchlist, setWatchlist] = useState([]);
+  const [monitoring, setMonitoring] = useState(false);
+
+  const [activeTab, setActiveTab] = useState("analysis");
+  const [mode, setMode] = useState("search");
+  const [query, setQuery] = useState("");
+  const [imgFile, setImgFile] = useState(null);
+  const [imgPreview, setImgPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadStep, setLoadStep] = useState(0);
+  const [report, setReport] = useState(null);
+  const [chartImage, setChartImage] = useState(null);
+  const [currentLogId, setCurrentLogId] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!apiKey && !BASE_URL) setShowKeyModal(true);
+  }, []);
+
+  const saveApiKey = (key) => {
+    setApiKey(key);
+    ls_set("cs_api_key", key);
+    setShowKeyModal(false);
+  };
+
+  // P0-1: localStorage 영속화
+  const addLog = useCallback((rep) => {
+    const entry = {
+      id: String(Date.now()),
+      timestamp: new Date().toISOString(),
+      ticker: rep.ticker || "",
+      name: rep.name || "",
+      position: rep.strategy?.position || "",
+      confidence: rep.strategy?.confidence || "",
+      entry_zone: rep.strategy?.entry_zone || "",
+      stop_loss: rep.strategy?.stop_loss || "",
+      target_prices: rep.strategy?.target_prices || [],
+      current_price: rep.current_price || "",
+      timeframe: rep.timeframe || "",
+      result: "pending",
+    };
+    setLogs(prev => {
+      const updated = [entry, ...prev].slice(0, 100);
+      ls_set("cs_logs", updated);
+      return updated;
+    });
+    return entry.id;
+  }, []);
+
+  const updateLogResult = useCallback((id, result) => {
+    setLogs(prev => {
+      const updated = prev.map(l => l.id === id ? { ...l, result } : l);
+      ls_set("cs_logs", updated);
+      return updated;
+    });
+    // 백엔드 연동
+    if (BASE_URL) {
+      fetch(`${BASE_URL}/api/performance/update`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ log_id: id, result }),
+      }).catch(() => {});
+    }
+  }, []);
+
+  const handleAnalyze = async () => {
+    if (!query.trim() && mode === "search") return;
+    if (!imgFile && mode === "upload") return;
+
+    setError("");
+    setReport(null);
+    setChartImage(null);
+    setLoading(true);
+    setLoadStep(0);
+
+    try {
+      if (mode === "search") {
+        setLoadStep(0);
+        let result;
+
+        if (BASE_URL) {
+          const resp = await fetch(`${BASE_URL}/api/analyze-full?q=${encodeURIComponent(query.trim())}`);
+          if (!resp.ok) {
+            const e = await resp.json();
+            throw new Error(e.detail || `서버 오류 ${resp.status}`);
+          }
+          setLoadStep(1);
+          const data = await resp.json();
+          setLoadStep(2);
+          result = data.report;
+          setChartImage(data.chart_image || null);
+        } else {
+          if (!apiKey) { setShowKeyModal(true); return; }
+          setLoadStep(1);
+          result = await analyzeDirectly(query.trim(), apiKey);
+          setLoadStep(2);
+        }
+
+        setReport(result);
+        const id = addLog(result);
+        setCurrentLogId(id);
+
+      } else {
+        // 이미지 업로드 모드
+        if (!BASE_URL) {
+          setError("이미지 분석은 백엔드 서버(localhost:8000)가 필요합니다.");
+          return;
+        }
+        setLoadStep(0);
+        const form = new FormData();
+        form.append("file", imgFile);
+        if (apiKey) form.append("api_key", apiKey);
+
+        const resp = await fetch(`${BASE_URL}/api/analyze`, { method: "POST", body: form });
+        if (!resp.ok) {
+          const e = await resp.json();
+          throw new Error(e.detail || `서버 오류 ${resp.status}`);
+        }
+        setLoadStep(2);
+        const data = await resp.json();
+        setReport(data.report);
+        setChartImage(data.chart_image || null);
+        const id = addLog(data.report);
+        setCurrentLogId(id);
+      }
+    } catch (e) {
+      setError(e.message || "분석 중 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImgFile = (f) => {
+    setImgFile(f);
+    setReport(null);
+    setError("");
+    if (f) {
+      const reader = new FileReader();
+      reader.onload = e => setImgPreview(e.target.result);
+      reader.readAsDataURL(f);
+    } else {
+      setImgPreview(null);
+    }
+  };
+
+  const handleAddWatchlist = async (ticker) => {
+    const item = { ticker: ticker.toUpperCase(), name: ticker, added_at: new Date().toISOString() };
+    setWatchlist(prev => [...prev.filter(w => w.ticker !== item.ticker), item]);
+    if (BASE_URL) {
+      await fetch(`${BASE_URL}/api/watchlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticker, name: ticker }),
+      }).catch(() => {});
+    }
+  };
+
+  const handleRemoveWatchlist = async (ticker) => {
+    setWatchlist(prev => prev.filter(w => w.ticker !== ticker));
+    if (BASE_URL) {
+      await fetch(`${BASE_URL}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
+    }
+  };
+
+  const handleToggleMonitor = async () => {
+    if (!BASE_URL) { setError("모니터 기능은 백엔드 서버가 필요합니다."); return; }
+    if (monitoring) {
+      await fetch(`${BASE_URL}/api/monitor/stop`, { method: "POST" }).catch(() => {});
+      setMonitoring(false);
+    } else {
+      await fetch(`${BASE_URL}/api/monitor/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ interval_minutes: 60 }),
+      }).catch(() => {});
+      setMonitoring(true);
+    }
+  };
+
+  return (
+    <div className="app">
+      {showKeyModal && <ApiKeyModal onSave={saveApiKey} />}
+
+      {/* 헤더 */}
+      <div className="header">
+        <div className="logo">
+          <div className="logo-icon">🛡</div>
+          Chart Sentinel
+        </div>
+        <div className="header-right">
+          <span className={`api-status ${apiKey || BASE_URL ? "api-ok" : "api-bad"}`}>
+            {BASE_URL ? "🟢 서버 연결" : apiKey ? "🟡 직접 호출" : "⚠ 키 없음"}
+          </span>
+          <button className="btn-ghost" onClick={() => setShowKeyModal(true)}>API 키 설정</button>
+        </div>
+      </div>
+
+      {/* 탭 */}
+      <div className="tabs">
+        {[["analysis","📊 분석"],["performance","📈 성과"],["monitor","👁 모니터"]].map(([id,label]) => (
+          <button key={id} className={`tab${activeTab===id?" active":""}`} onClick={() => setActiveTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {/* 메인 */}
+      <div className="main">
+
+        {/* 분석 탭 */}
+        {activeTab === "analysis" && (
+          <div className="grid2">
+            {/* 왼쪽: 입력 패널 */}
+            <div>
+              <div className="mode-toggle">
+                <button className={`mode-btn${mode==="search"?" active":""}`} onClick={() => setMode("search")}>🔍 검색</button>
+                <button className={`mode-btn${mode==="upload"?" active":""}`} onClick={() => setMode("upload")}>📤 이미지</button>
+              </div>
+
+              {mode === "search" ? (
+                <>
+                  <div className="search-wrap">
+                    <input className="search-input"
+                      placeholder="종목 검색 (NVDA, BTC, 삼성전자...)"
+                      value={query}
+                      onChange={e => setQuery(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && !loading && handleAnalyze()} />
+                    <button className="btn-primary" onClick={handleAnalyze} disabled={loading || !query.trim()}>
+                      {loading ? "분석 중..." : "분석"}
+                    </button>
+                  </div>
+                  <div className="quick-btns">
+                    {QUICK_TICKERS.map(t => (
+                      <button key={t} className="quick-btn" onClick={() => { setQuery(t); }}>{t}</button>
+                    ))}
+                  </div>
+                  {query && (
+                    <div style={{marginTop:16}}>
+                      <TradingViewWidget symbol={query.toUpperCase()} />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <ImageDropzone onFile={handleImgFile} preview={imgPreview} />
+                  {imgFile && (
+                    <button className="btn-primary" style={{marginTop:12,width:"100%"}}
+                      onClick={handleAnalyze} disabled={loading}>
+                      {loading ? "분석 중..." : "AI 분석 시작"}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* 오른쪽: 결과 패널 */}
+            <div className="card">
+              {loading ? (
+                <Loader step={loadStep} />
+              ) : error ? (
+                <div className="error-card">⚠ {error}</div>
+              ) : report ? (
+                <ReportCard
+                  report={report}
+                  chartImage={mode === "search" ? chartImage : null}
+                  logId={currentLogId}
+                  onResult={(r) => currentLogId && updateLogResult(currentLogId, r)}
+                />
+              ) : (
+                <div className="empty">
+                  <div className="empty-icon">🔍</div>
+                  <div className="empty-text">종목을 검색하거나 차트를 업로드하여<br />AI 분석을 시작하세요</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 성과 탭 */}
+        {activeTab === "performance" && (
+          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} />
+        )}
+
+        {/* 모니터 탭 */}
+        {activeTab === "monitor" && (
+          <MonitorTab
+            watchlist={watchlist}
+            onAdd={handleAddWatchlist}
+            onRemove={handleRemoveWatchlist}
+            monitoring={monitoring}
+            onToggleMonitor={handleToggleMonitor}
+          />
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
