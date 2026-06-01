@@ -506,6 +506,62 @@ async def update_log_result(log_id: str, result: str) -> bool:
     return updated
 
 
+def _parse_price(price_str: str) -> Optional[float]:
+    """
+    "150.5", "$1,234.56", "150-160" (범위면 하한), "N/A" → float 또는 None
+    """
+    if not price_str or price_str in ("-", "N/A", ""):
+        return None
+    # 범위 표현 (예: "150-160") → 하한 사용
+    s = str(price_str).replace(",", "").replace("$", "").strip()
+    if "-" in s:
+        s = s.split("-")[0].strip()
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _analyze_single_for_compare(q: str) -> dict:
+    """비교용 단일 종목 분석 (chart_image 포함, 에러 시 오류 dict 반환)"""
+    try:
+        ticker, asset_type = resolve_ticker(q)
+        if asset_type == "crypto":
+            df = await fetch_crypto_ohlcv(ticker)
+            current_price = str(await fetch_crypto_price(ticker))
+        else:
+            df = await fetch_stock_data(ticker)
+            cp = df["Close"].squeeze().iloc[-1]
+            current_price = f"{cp:,.2f}"
+
+        img_bytes, (news_list, _), (macro_data, _) = await asyncio.gather(
+            generate_chart(df, ticker),
+            fetch_news(ticker),
+            fetch_macro(),
+        )
+        vision_text = await analyze_chart_vision(img_bytes)
+        report = await generate_report(vision_text, news_list, macro_data, ticker, current_price)
+
+        # 수익률 계산 (3개월 기준)
+        try:
+            closes = df["Close"].squeeze().dropna()
+            perf_3m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0] * 100)
+        except Exception:
+            perf_3m = 0.0
+
+        return {
+            "ticker": ticker,
+            "query": q,
+            "report": report,
+            "chart_image": base64.standard_b64encode(img_bytes).decode(),
+            "perf_3m": round(perf_3m, 2),
+            "error": None,
+        }
+    except Exception as e:
+        return {"ticker": q.upper(), "query": q, "report": None,
+                "chart_image": None, "perf_3m": 0.0, "error": str(e)}
+
+
 # ── 워치리스트 & 모니터 ───────────────────────────────────────────────────────
 watchlist_data: list[dict] = []
 monitor_tasks: dict[str, asyncio.Task] = {}
@@ -753,6 +809,138 @@ async def monitor_stop():
         _monitor_task.cancel()
         return {"status": "stopped"}
     return {"status": "not_running"}
+
+
+@app.get("/api/compare")
+async def compare_tickers(tickers: str = Query(..., description="쉼표 구분 종목 (예: AAPL,NVDA,TSLA, 최대 3개)")):
+    """여러 종목을 동시에 분석하고 비교합니다."""
+    ticker_list = [t.strip() for t in tickers.split(",") if t.strip()][:3]
+    if len(ticker_list) < 2:
+        raise HTTPException(status_code=422, detail="최소 2개 종목이 필요합니다")
+
+    results = await asyncio.gather(*[_analyze_single_for_compare(q) for q in ticker_list])
+    results = list(results)
+
+    # 상대 강도: 3개월 수익률 기준 순위
+    valid = [(i, r["perf_3m"]) for i, r in enumerate(results) if r["error"] is None]
+    valid_sorted = sorted(valid, key=lambda x: x[1], reverse=True)
+    ranks = {i: rank + 1 for rank, (i, _) in enumerate(valid_sorted)}
+
+    for i, r in enumerate(results):
+        r["relative_rank"] = ranks.get(i, None)
+
+    # 성과 로깅
+    for r in results:
+        if r["report"]:
+            try:
+                append_analysis_log(r["report"])
+            except Exception:
+                pass
+
+    return {
+        "results": results,
+        "summary": {
+            "tickers": [r["ticker"] for r in results],
+            "best_performer": results[valid_sorted[0][0]]["ticker"] if valid_sorted else None,
+            "worst_performer": results[valid_sorted[-1][0]]["ticker"] if valid_sorted else None,
+        },
+    }
+
+
+@app.get("/api/performance/auto-evaluate")
+async def auto_evaluate_performance():
+    """
+    분석 후 5일 이상 경과한 pending 항목을 자동으로 win/loss 판정합니다.
+    판정 기준:
+    - 현재가 >= target_prices[0]: win
+    - 현재가 <= stop_loss: loss
+    - 그 외: 아직 pending 유지 (max 20일 후 자동 loss)
+    """
+    _ensure_log_file()
+    async with _csv_lock:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+
+    now = datetime.utcnow()
+    updated_count = 0
+    evaluated = []
+
+    for row in rows:
+        if row.get("result") != "pending":
+            continue
+        try:
+            ts = datetime.fromisoformat(row["timestamp"])
+        except Exception:
+            continue
+
+        days_elapsed = (now - ts).days
+        if days_elapsed < 5:
+            continue
+
+        ticker = row.get("ticker", "")
+        if not ticker:
+            continue
+
+        # 현재가 조회
+        try:
+            ticker_sym, asset_type = resolve_ticker(ticker)
+            if asset_type == "crypto":
+                current = await fetch_crypto_price(ticker_sym)
+            else:
+                df = await fetch_stock_data(ticker_sym, period="5d")
+                current = float(df["Close"].squeeze().iloc[-1])
+        except Exception:
+            continue
+
+        # 판정
+        targets_raw = row.get("target_prices", "[]")
+        try:
+            targets = json.loads(targets_raw)
+        except Exception:
+            targets = []
+
+        target1 = _parse_price(targets[0]) if targets else None
+        stop    = _parse_price(row.get("stop_loss", ""))
+        entry   = _parse_price(row.get("entry_zone", ""))
+
+        new_result = None
+        if days_elapsed >= 20:
+            # 20일 경과 → 진입가 대비 현재가로 단순 판정
+            if entry and current > entry * 1.02:
+                new_result = "win"
+            else:
+                new_result = "loss"
+        elif target1 and current >= target1:
+            new_result = "win"
+        elif stop and current <= stop:
+            new_result = "loss"
+
+        if new_result:
+            row["result"] = new_result
+            updated_count += 1
+            evaluated.append({
+                "ticker": ticker,
+                "days_elapsed": days_elapsed,
+                "result": new_result,
+                "current_price": current,
+                "target": target1,
+                "stop": stop,
+            })
+
+    # CSV 업데이트
+    if updated_count > 0:
+        async with _csv_lock:
+            with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=LOG_COLUMNS)
+                w.writeheader()
+                w.writerows(rows)
+
+    stats = await get_performance_stats()
+    return {
+        "evaluated_count": updated_count,
+        "evaluated": evaluated,
+        "stats": stats,
+    }
 
 
 @app.get("/api/macro")

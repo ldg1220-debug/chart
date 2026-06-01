@@ -7,6 +7,7 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <style>
     :root {
       --bg0: #0d1117; --bg1: #161b22; --bg2: #21262d;
@@ -187,6 +188,38 @@
     .scroll-area::-webkit-scrollbar { width: 4px; }
     .scroll-area::-webkit-scrollbar-track { background: transparent; }
     .scroll-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* 비교 탭 */
+    .compare-input-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    .compare-ticker-input { flex: 1; min-width: 100px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; color: var(--text); font-size: 14px; outline: none; }
+    .compare-ticker-input:focus { border-color: var(--blue); }
+    .compare-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .compare-card { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .compare-card.error { border-color: rgba(239,68,68,.3); }
+    .compare-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .compare-ticker { font-size: 16px; font-weight: 700; }
+    .rank-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+    .rank-1 { background: rgba(245,158,11,.2); color: var(--amber); }
+    .rank-2 { background: rgba(139,148,158,.15); color: var(--text2); }
+    .rank-3 { background: rgba(180,120,80,.15); color: #cd7f32; }
+    .perf-num { font-size: 20px; font-weight: 700; }
+    .perf-pos { color: var(--green); }
+    .perf-neg { color: var(--red); }
+    .compare-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
+    .compare-summary { background: var(--bg2); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; display: flex; gap: 20px; flex-wrap: wrap; }
+    .compare-summary-item { display: flex; flex-direction: column; gap: 2px; }
+    .compare-summary-label { color: var(--text2); font-size: 11px; }
+    .compare-summary-val { font-weight: 600; }
+
+    /* 캡처 버튼 (P1-3) */
+    .capture-btn { background: rgba(168,85,247,.12); color: var(--purple); border: 1px solid rgba(168,85,247,.3); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; transition: all .15s; margin-top: 8px; }
+    .capture-btn:hover { background: rgba(168,85,247,.22); }
+    .capture-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* 자동 검증 (P1-2) */
+    .auto-eval-result { background: var(--bg2); border-radius: 8px; padding: 12px 16px; margin-top: 12px; font-size: 13px; }
+    .auto-eval-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .auto-eval-item:last-child { border-bottom: none; }
   </style>
 </head>
 <body>
@@ -224,9 +257,11 @@ function badgeClass(pos) {
   return c === "pos-buy" ? "badge-buy" : c === "pos-sell" ? "badge-sell" : "badge-hold";
 }
 
-// ── TradingView 위젯 ──────────────────────────────────────────────────────────
-function TradingViewWidget({ symbol }) {
+// ── TradingView 위젯 (P1-3: html2canvas 캡처 포함) ───────────────────────────
+function TradingViewWidget({ symbol, onCapture }) {
   const ref = useRef(null);
+  const [capturing, setCapturing] = useState(false);
+
   useEffect(() => {
     if (!symbol || !ref.current) return;
     ref.current.innerHTML = "";
@@ -240,7 +275,40 @@ function TradingViewWidget({ symbol }) {
     });
     ref.current.appendChild(s);
   }, [symbol]);
-  return <div ref={ref} className="tv-container" />;
+
+  const handleCapture = async () => {
+    if (!ref.current || !onCapture) return;
+    setCapturing(true);
+    try {
+      if (typeof html2canvas === "undefined") {
+        throw new Error("html2canvas 라이브러리를 불러오지 못했습니다");
+      }
+      const canvas = await html2canvas(ref.current, {
+        useCORS: true, allowTaint: true,
+        backgroundColor: "#0d1117", scale: 1,
+        logging: false,
+      });
+      canvas.toBlob(blob => {
+        if (blob) onCapture(blob);
+        else onCapture(null, "캡처 실패: blob 변환 오류");
+      }, "image/png");
+    } catch (e) {
+      onCapture(null, e.message || "캡처 중 오류 발생");
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  return (
+    <div>
+      <div ref={ref} className="tv-container" />
+      {onCapture && (
+        <button className="capture-btn" onClick={handleCapture} disabled={capturing || !symbol}>
+          {capturing ? "캡처 중..." : "📸 차트 캡처 → AI 분석"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 // ── 이미지 드롭존 ─────────────────────────────────────────────────────────────
@@ -353,8 +421,10 @@ function ReportCard({ report, chartImage, logId, onResult }) {
   );
 }
 
-// ── 성과 탭 ───────────────────────────────────────────────────────────────────
+// ── 성과 탭 (P1-2: 자동 검증 포함) ──────────────────────────────────────────
 function PerformanceTab({ logs, onUpdateResult }) {
+  const [autoEvalLoading, setAutoEvalLoading] = useState(false);
+  const [autoEvalResult, setAutoEvalResult] = useState(null);
   const evaluated = logs.filter(l => l.result === "win" || l.result === "loss");
   const wins  = evaluated.filter(l => l.result === "win").length;
   const winRate = evaluated.length ? Math.round(wins / evaluated.length * 100) : 0;
@@ -417,6 +487,59 @@ function PerformanceTab({ logs, onUpdateResult }) {
         </div>
       )}
 
+      {/* P1-2: 자동 검증 */}
+      {BASE_URL && (
+        <div className="card" style={{marginBottom:20}}>
+          <div className="card-title">자동 승률 검증</div>
+          <div style={{fontSize:13,color:"var(--text2)",marginBottom:12,lineHeight:1.5}}>
+            분석 후 5일 이상 경과한 대기 항목을 현재 가격과 비교하여 자동으로 Win/Loss를 판정합니다.
+            20일 초과 시 진입가 대비 2% 초과 여부로 판정합니다.
+          </div>
+          <button className="btn-primary" style={{marginBottom:12}}
+            disabled={autoEvalLoading}
+            onClick={async () => {
+              setAutoEvalLoading(true);
+              setAutoEvalResult(null);
+              try {
+                const resp = await fetch(`${BASE_URL}/api/performance/auto-evaluate`);
+                const data = await resp.json();
+                setAutoEvalResult(data);
+              } catch (e) {
+                setAutoEvalResult({ error: e.message });
+              } finally {
+                setAutoEvalLoading(false);
+              }
+            }}>
+            {autoEvalLoading ? "검증 중..." : "⚡ 자동 검증 실행"}
+          </button>
+          {autoEvalResult && (
+            <div className="auto-eval-result">
+              {autoEvalResult.error ? (
+                <div style={{color:"var(--red)"}}>⚠ {autoEvalResult.error}</div>
+              ) : (
+                <>
+                  <div style={{marginBottom:8,fontWeight:600}}>
+                    {autoEvalResult.evaluated_count}건 판정 완료
+                    {autoEvalResult.stats && ` · 갱신 승률: ${autoEvalResult.stats.win_rate}%`}
+                  </div>
+                  {(autoEvalResult.evaluated || []).map((e, i) => (
+                    <div key={i} className="auto-eval-item">
+                      <span><strong>{e.ticker}</strong> · {e.days_elapsed}일 경과</span>
+                      <span className={`result-badge ${e.result==="win"?"rb-win":"rb-loss"}`}>
+                        {e.result==="win"?"✓ Win":"✗ Loss"}
+                      </span>
+                    </div>
+                  ))}
+                  {autoEvalResult.evaluated_count === 0 && (
+                    <div style={{color:"var(--text2)"}}>5일 이상 경과한 대기 항목이 없습니다</div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card">
         <div className="card-title">최근 분석 기록</div>
         {logs.length === 0 ? (
@@ -458,6 +581,178 @@ function PerformanceTab({ logs, onUpdateResult }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── 비교 탭 (P1-1) ────────────────────────────────────────────────────────────
+function CompareTab({ addLog }) {
+  const [tickers, setTickers] = useState(["", "", ""]);
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [error, setError] = useState("");
+
+  const handleCompare = async () => {
+    const valid = tickers.filter(t => t.trim());
+    if (valid.length < 2) { setError("최소 2개 종목을 입력하세요"); return; }
+    if (!BASE_URL) { setError("비교 분석은 백엔드 서버(localhost:8000)가 필요합니다"); return; }
+
+    setError(""); setResults(null); setSummary(null); setLoading(true);
+    try {
+      const resp = await fetch(`${BASE_URL}/api/compare?tickers=${encodeURIComponent(valid.join(","))}`);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || `서버 오류 ${resp.status}`); }
+      const data = await resp.json();
+      setResults(data.results);
+      setSummary(data.summary);
+      // 성과 로그 추가
+      data.results.forEach(r => { if (r.report) addLog(r.report); });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const rankClass = (rank) => rank === 1 ? "rank-1" : rank === 2 ? "rank-2" : "rank-3";
+  const rankLabel = (rank) => rank === 1 ? "🥇 1위" : rank === 2 ? "🥈 2위" : rank === 3 ? "🥉 3위" : "-";
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">종목 비교 분석</div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16}}>
+          2~3개 종목을 동시에 분석하여 3개월 수익률 기준으로 상대 강도를 비교합니다.
+        </div>
+        <div className="compare-input-row">
+          {tickers.map((t, i) => (
+            <input key={i} className="compare-ticker-input"
+              placeholder={`종목 ${i+1} (예: ${["NVDA","AAPL","TSLA"][i]})`}
+              value={t}
+              onChange={e => setTickers(prev => prev.map((v, j) => j === i ? e.target.value : v))}
+              onKeyDown={e => e.key === "Enter" && !loading && handleCompare()} />
+          ))}
+          <button className="btn-primary" onClick={handleCompare}
+            disabled={loading || tickers.filter(t=>t.trim()).length < 2}>
+            {loading ? "분석 중..." : "⚡ 비교 분석"}
+          </button>
+        </div>
+        <div className="quick-btns">
+          {[["NVDA","AAPL","TSLA"],["BTC","ETH","SOL"],["삼성전자","SK하이닉스","NAVER"]].map((preset, i) => (
+            <button key={i} className="quick-btn"
+              onClick={() => setTickers([...preset])}>
+              {preset.join(" vs ")}
+            </button>
+          ))}
+        </div>
+        {error && <div className="error-card" style={{marginTop:12}}>⚠ {error}</div>}
+      </div>
+
+      {loading && (
+        <div className="card" style={{textAlign:"center",padding:"40px 20px"}}>
+          <div className="loader-spinner" />
+          <div style={{color:"var(--text2)",fontSize:14,marginTop:12}}>
+            {tickers.filter(t=>t.trim()).length}개 종목 병렬 분석 중...
+          </div>
+        </div>
+      )}
+
+      {summary && (
+        <div className="compare-summary">
+          <div className="compare-summary-item">
+            <span className="compare-summary-label">최고 성과</span>
+            <span className="compare-summary-val" style={{color:"var(--green)"}}>🏆 {summary.best_performer}</span>
+          </div>
+          <div className="compare-summary-item">
+            <span className="compare-summary-label">최저 성과</span>
+            <span className="compare-summary-val" style={{color:"var(--red)"}}>📉 {summary.worst_performer}</span>
+          </div>
+          <div className="compare-summary-item">
+            <span className="compare-summary-label">비교 종목</span>
+            <span className="compare-summary-val">{(summary.tickers || []).join(" · ")}</span>
+          </div>
+        </div>
+      )}
+
+      {results && (
+        <div className="compare-grid">
+          {results.map((r, i) => (
+            <div key={i} className={`compare-card${r.error ? " error" : ""}`}>
+              <div className="compare-header">
+                <div>
+                  <div className="compare-ticker">{r.ticker}</div>
+                  <div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>
+                    {r.report?.name || r.query}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {r.relative_rank && (
+                    <span className={`rank-badge ${rankClass(r.relative_rank)}`}>
+                      {rankLabel(r.relative_rank)}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {r.error ? (
+                <div style={{color:"var(--red)",fontSize:13}}>⚠ {r.error}</div>
+              ) : (
+                <>
+                  <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                    <span className={`perf-num ${r.perf_3m >= 0 ? "perf-pos" : "perf-neg"}`}>
+                      {r.perf_3m >= 0 ? "+" : ""}{r.perf_3m}%
+                    </span>
+                    <span style={{fontSize:12,color:"var(--text2)"}}>3개월 수익률</span>
+                  </div>
+
+                  {r.report?.current_price && (
+                    <div style={{fontSize:13,color:"var(--text2)",marginBottom:8}}>
+                      현재가: <strong style={{color:"var(--text)"}}>{r.report.current_price}</strong>
+                    </div>
+                  )}
+
+                  {r.report?.strategy && (
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                      <span className={`pos-badge ${badgeClass(r.report.strategy.position)}`}
+                        style={{fontSize:11,padding:"2px 10px"}}>
+                        {r.report.strategy.position}
+                      </span>
+                      <span style={{fontSize:12,color:"var(--text2)"}}>
+                        확신도 {r.report.strategy.confidence}/10
+                      </span>
+                    </div>
+                  )}
+
+                  {r.chart_image && (
+                    <div className="chart-img-wrap" style={{marginBottom:8}}>
+                      <img src={`data:image/png;base64,${r.chart_image}`} alt={r.ticker} />
+                    </div>
+                  )}
+
+                  <div className="compare-section">
+                    <div style={{color:"var(--text2)",marginBottom:4}}>기술적 분석</div>
+                    <div style={{lineHeight:1.5}}>{r.report?.technical_analysis?.summary || "-"}</div>
+                  </div>
+
+                  <div className="compare-section">
+                    <div style={{color:"var(--text2)",marginBottom:4}}>전략 근거</div>
+                    <div style={{lineHeight:1.5}}>{r.report?.strategy?.rationale || "-"}</div>
+                  </div>
+
+                  <div className="compare-section" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12}}>
+                    <span style={{color:"var(--text2)"}}>진입</span>
+                    <span>{r.report?.strategy?.entry_zone || "-"}</span>
+                    <span style={{color:"var(--text2)"}}>목표</span>
+                    <span>{(r.report?.strategy?.target_prices || [])[0] || "-"}</span>
+                    <span style={{color:"var(--text2)"}}>손절</span>
+                    <span>{r.report?.strategy?.stop_loss || "-"}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -815,7 +1110,7 @@ function App() {
 
       {/* 탭 */}
       <div className="tabs">
-        {[["analysis","📊 분석"],["performance","📈 성과"],["monitor","👁 모니터"]].map(([id,label]) => (
+        {[["analysis","📊 분석"],["compare","⚖ 비교"],["performance","📈 성과"],["monitor","👁 모니터"]].map(([id,label]) => (
           <button key={id} className={`tab${activeTab===id?" active":""}`} onClick={() => setActiveTab(id)}>{label}</button>
         ))}
       </div>
@@ -852,7 +1147,30 @@ function App() {
                   </div>
                   {query && (
                     <div style={{marginTop:16}}>
-                      <TradingViewWidget symbol={query.toUpperCase()} />
+                      <TradingViewWidget
+                        symbol={query.toUpperCase()}
+                        onCapture={BASE_URL ? async (blob, err) => {
+                          if (err || !blob) { setError(err || "캡처 실패"); return; }
+                          setError(""); setReport(null); setLoading(true); setLoadStep(1);
+                          try {
+                            const form = new FormData();
+                            form.append("file", blob, "capture.png");
+                            if (apiKey) form.append("api_key", apiKey);
+                            const resp = await fetch(`${BASE_URL}/api/analyze`, { method: "POST", body: form });
+                            if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail); }
+                            setLoadStep(2);
+                            const data = await resp.json();
+                            setReport(data.report);
+                            setChartImage(data.chart_image || null);
+                            const id = addLog(data.report);
+                            setCurrentLogId(id);
+                          } catch (e) {
+                            setError(e.message || "분석 중 오류");
+                          } finally {
+                            setLoading(false);
+                          }
+                        } : null}
+                      />
                     </div>
                   )}
                 </>
@@ -890,6 +1208,11 @@ function App() {
               )}
             </div>
           </div>
+        )}
+
+        {/* 비교 탭 */}
+        {activeTab === "compare" && (
+          <CompareTab addLog={addLog} />
         )}
 
         {/* 성과 탭 */}
