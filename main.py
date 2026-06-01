@@ -21,7 +21,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Backg
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from plotly.subplots import make_subplots
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── 환경변수 ──────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
@@ -465,7 +465,7 @@ def _ensure_log_file():
             csv.DictWriter(f, fieldnames=LOG_COLUMNS).writeheader()
 
 
-def append_analysis_log(report: dict) -> None:
+async def append_analysis_log(report: dict) -> None:
     _ensure_log_file()
     strategy = report.get("strategy", {})
     row = {
@@ -482,8 +482,9 @@ def append_analysis_log(report: dict) -> None:
         "timeframe": report.get("timeframe", ""),
         "result": "pending",
     }
-    with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
-        csv.DictWriter(f, fieldnames=LOG_COLUMNS).writerow(row)
+    async with _csv_lock:
+        with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=LOG_COLUMNS).writerow(row)
 
 
 async def get_performance_stats() -> dict:
@@ -602,6 +603,8 @@ async def _analyze_single_for_compare(q: str) -> dict:
 # ── 워치리스트 & 모니터 ───────────────────────────────────────────────────────
 watchlist_data: list[dict] = []
 monitor_tasks: dict[str, asyncio.Task] = {}
+_watchlist_lock = asyncio.Lock()
+_portfolio_lock = asyncio.Lock()
 
 
 def _load_watchlist():
@@ -623,9 +626,9 @@ app = FastAPI(title="Chart Sentinel API", version="4.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Api-Key"],
 )
 
 
@@ -707,7 +710,7 @@ async def analyze_full(q: str = Query(..., description="종목 검색어 (한글
 
     # 5. 로깅
     try:
-        append_analysis_log(report)
+        await append_analysis_log(report)
     except Exception:
         pass
 
@@ -729,7 +732,7 @@ async def analyze_image(
     report = await generate_report(vision_text, [], {}, "UNKNOWN", "N/A", api_key)
 
     try:
-        append_analysis_log(report)
+        await append_analysis_log(report)
     except Exception:
         pass
 
@@ -743,7 +746,7 @@ async def analyze_text(body: TextAnalysisRequest):
     vision_text = f"종목: {body.ticker}\n{body.price_data}\n{body.notes}"
     report = await generate_report(vision_text, [], {}, body.ticker, "N/A", body.api_key or "")
     try:
-        append_analysis_log(report)
+        await append_analysis_log(report)
     except Exception:
         pass
     return {"report": report}
@@ -793,16 +796,18 @@ async def get_watchlist():
 async def add_to_watchlist(item: WatchlistItem):
     ticker, _ = resolve_ticker(item.ticker)
     entry = {"ticker": ticker, "name": item.name or ticker, "added_at": datetime.utcnow().isoformat()}
-    watchlist_data.append(entry)
-    _save_watchlist()
+    async with _watchlist_lock:
+        watchlist_data.append(entry)
+        _save_watchlist()
     return {"watchlist": watchlist_data}
 
 
 @app.delete("/api/watchlist/{ticker}")
 async def remove_from_watchlist(ticker: str):
     global watchlist_data
-    watchlist_data = [w for w in watchlist_data if w["ticker"] != ticker.upper()]
-    _save_watchlist()
+    async with _watchlist_lock:
+        watchlist_data = [w for w in watchlist_data if w["ticker"] != ticker.upper()]
+        _save_watchlist()
     return {"watchlist": watchlist_data}
 
 
@@ -821,7 +826,7 @@ async def _monitor_loop(interval_minutes: int):
                 img_bytes = await generate_chart(df, ticker)
                 vision_text = await analyze_chart_vision(img_bytes)
                 report = await generate_report(vision_text, [], {}, ticker, current_price)
-                append_analysis_log(report)
+                await append_analysis_log(report)
                 await send_all_alerts(report)
             except Exception:
                 continue
@@ -870,7 +875,7 @@ async def compare_tickers(tickers: str = Query(..., description="쉼표 구분 �
     for r in results:
         if r["report"]:
             try:
-                append_analysis_log(r["report"])
+                await append_analysis_log(r["report"])
             except Exception:
                 pass
 
@@ -1249,9 +1254,9 @@ async def _save_portfolio():
 
 
 class PortfolioItem(BaseModel):
-    ticker: str
-    shares: float
-    avg_price: float
+    ticker: str = Field(min_length=1, max_length=20)
+    shares: float = Field(gt=0)
+    avg_price: float = Field(gt=0)
     name: Optional[str] = ""
 
 
@@ -1333,23 +1338,23 @@ async def get_portfolio():
 @app.post("/api/portfolio/add")
 async def add_portfolio(item: PortfolioItem):
     sym, _ = resolve_ticker(item.ticker)
-    existing = next((p for p in portfolio_data if p["ticker"] == sym), None)
-    if existing:
-        # 평균 단가 갱신 (매수 평균)
-        total_shares = existing["shares"] + item.shares
-        existing["avg_price"] = round(
-            (existing["shares"] * existing["avg_price"] + item.shares * item.avg_price) / total_shares, 4
-        )
-        existing["shares"] = total_shares
-    else:
-        portfolio_data.append({
-            "ticker": sym,
-            "name": item.name or sym,
-            "shares": item.shares,
-            "avg_price": item.avg_price,
-            "added_at": datetime.utcnow().isoformat(),
-        })
-    await _save_portfolio()
+    async with _portfolio_lock:
+        existing = next((p for p in portfolio_data if p["ticker"] == sym), None)
+        if existing:
+            total_shares = existing["shares"] + item.shares
+            existing["avg_price"] = round(
+                (existing["shares"] * existing["avg_price"] + item.shares * item.avg_price) / total_shares, 4
+            )
+            existing["shares"] = total_shares
+        else:
+            portfolio_data.append({
+                "ticker": sym,
+                "name": item.name or sym,
+                "shares": item.shares,
+                "avg_price": item.avg_price,
+                "added_at": datetime.utcnow().isoformat(),
+            })
+        await _save_portfolio()
     return await get_portfolio()
 
 
@@ -1357,8 +1362,9 @@ async def add_portfolio(item: PortfolioItem):
 async def remove_portfolio(ticker: str):
     global portfolio_data
     sym, _ = resolve_ticker(ticker)
-    portfolio_data = [p for p in portfolio_data if p["ticker"] != sym]
-    await _save_portfolio()
+    async with _portfolio_lock:
+        portfolio_data = [p for p in portfolio_data if p["ticker"] != sym]
+        await _save_portfolio()
     return await get_portfolio()
 
 

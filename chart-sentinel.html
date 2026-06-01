@@ -264,6 +264,26 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
+// ── ErrorBoundary ─────────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error("[Chart Sentinel] 렌더 오류:", e, info); }
+  render() {
+    if (this.state.error) return (
+      <div style={{padding:40,textAlign:"center",color:"var(--red)"}}>
+        <div style={{fontSize:32,marginBottom:12}}>⚠</div>
+        <div style={{fontWeight:700,marginBottom:8}}>렌더링 오류가 발생했습니다</div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16}}>{String(this.state.error)}</div>
+        <button className="btn-primary" onClick={() => this.setState({ error: null })}>
+          다시 시도
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 const QUICK_TICKERS = ["NVDA", "AAPL", "TSLA", "BTC", "ETH", "삼성전자"];
 const ANTHROPIC_DIRECT = "https://api.anthropic.com/v1/messages";
@@ -307,7 +327,22 @@ function ls_get(key, fallback) {
   catch { return fallback; }
 }
 function ls_set(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch (e) {
+    if (e && e.name === "QuotaExceededError" && key === "cs_logs" && Array.isArray(val)) {
+      // 차트 이미지부터 제거하여 용량 확보 후 재시도
+      const trimmed = val.map(({ _chart, ...rest }) => rest);
+      try {
+        localStorage.setItem(key, JSON.stringify(trimmed));
+        console.warn("[Chart Sentinel] localStorage 용량 부족 — 차트 이미지를 제외하고 저장했습니다.");
+      } catch {
+        // 그래도 실패하면 최근 10개만 저장
+        try { localStorage.setItem(key, JSON.stringify(trimmed.slice(0, 10))); } catch {}
+        console.warn("[Chart Sentinel] localStorage 용량 부족 — 최근 10건만 유지합니다.");
+      }
+    }
+  }
 }
 
 function positionClass(pos) {
@@ -326,13 +361,16 @@ function badgeClass(pos) {
 function TradingViewWidget({ symbol, onCapture }) {
   const ref = useRef(null);
   const [capturing, setCapturing] = useState(false);
+  const [widgetError, setWidgetError] = useState(false);
 
   useEffect(() => {
     if (!symbol || !ref.current) return;
+    setWidgetError(false);
     ref.current.innerHTML = "";
     const s = document.createElement("script");
     s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     s.async = true;
+    s.onerror = () => setWidgetError(true);
     s.innerHTML = JSON.stringify({
       symbol, interval: "D", theme: "dark", style: "1",
       locale: "kr", width: "100%", height: 400,
@@ -366,8 +404,15 @@ function TradingViewWidget({ symbol, onCapture }) {
 
   return (
     <div>
-      <div ref={ref} className="tv-container" />
-      {onCapture && (
+      {widgetError ? (
+        <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",
+          background:"var(--bg2)",borderRadius:8,color:"var(--text2)",fontSize:13}}>
+          ⚠ TradingView 차트를 불러올 수 없습니다 (네트워크 또는 광고 차단기 확인)
+        </div>
+      ) : (
+        <div ref={ref} className="tv-container" />
+      )}
+      {onCapture && !widgetError && (
         <button className="capture-btn" onClick={handleCapture} disabled={capturing || !symbol}>
           {capturing ? "캡처 중..." : "📸 차트 캡처 → AI 분석"}
         </button>
@@ -632,7 +677,7 @@ function ReportCard({ report, chartImage, logId, onResult }) {
 }
 
 // ── 성과 탭 (P1-2: 자동 검증 포함) ──────────────────────────────────────────
-function PerformanceTab({ logs, onUpdateResult, setHistoryModal }) {
+function PerformanceTab({ logs, onUpdateResult, setHistoryModal, baseUrl }) {
   const [autoEvalLoading, setAutoEvalLoading] = useState(false);
   const [autoEvalResult, setAutoEvalResult] = useState(null);
   const evaluated = logs.filter(l => l.result === "win" || l.result === "loss");
@@ -698,7 +743,7 @@ function PerformanceTab({ logs, onUpdateResult, setHistoryModal }) {
       )}
 
       {/* P1-2: 자동 검증 */}
-      {BASE_URL && (
+      {baseUrl && (
         <div className="card" style={{marginBottom:20}}>
           <div className="card-title">자동 승률 검증</div>
           <div style={{fontSize:13,color:"var(--text2)",marginBottom:12,lineHeight:1.5}}>
@@ -711,7 +756,7 @@ function PerformanceTab({ logs, onUpdateResult, setHistoryModal }) {
               setAutoEvalLoading(true);
               setAutoEvalResult(null);
               try {
-                const resp = await fetch(`${BASE_URL}/api/performance/auto-evaluate`);
+                const resp = await fetch(`${baseUrl}/api/performance/auto-evaluate`);
                 const data = await resp.json();
                 setAutoEvalResult(data);
               } catch (e) {
@@ -800,7 +845,7 @@ function PerformanceTab({ logs, onUpdateResult, setHistoryModal }) {
 }
 
 // ── 비교 탭 (P1-1) ────────────────────────────────────────────────────────────
-function CompareTab({ addLog }) {
+function CompareTab({ addLog, baseUrl }) {
   const [tickers, setTickers] = useState(["", "", ""]);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
@@ -810,11 +855,11 @@ function CompareTab({ addLog }) {
   const handleCompare = async () => {
     const valid = tickers.filter(t => t.trim());
     if (valid.length < 2) { setError("최소 2개 종목을 입력하세요"); return; }
-    if (!BASE_URL) { setError("비교 분석은 백엔드 서버(localhost:8000)가 필요합니다"); return; }
+    if (!baseUrl) { setError("비교 분석은 백엔드 서버(localhost:8000)가 필요합니다"); return; }
 
     setError(""); setResults(null); setSummary(null); setLoading(true);
     try {
-      const resp = await fetch(`${BASE_URL}/api/compare?tickers=${encodeURIComponent(valid.join(","))}`);
+      const resp = await fetch(`${baseUrl}/api/compare?tickers=${encodeURIComponent(valid.join(","))}`);
       if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || `서버 오류 ${resp.status}`); }
       const data = await resp.json();
       setResults(data.results);
@@ -1042,7 +1087,6 @@ function BacktestTab() {
 
   const run = async () => {
     if (!ticker.trim()) return;
-    if (!BASE_URL && !getBaseUrl()) { setError("백테스팅은 백엔드 서버가 필요합니다"); return; }
     const bu = getBaseUrl();
     if (!bu) { setError("백엔드 서버 연결이 필요합니다"); return; }
     setLoading(true); setError(""); setResult(null);
@@ -1507,8 +1551,8 @@ function App() {
       return updated;
     });
     // 백엔드 연동
-    if (BASE_URL) {
-      fetch(`${BASE_URL}/api/performance/update`, {
+    if (baseUrl) {
+      fetch(`${baseUrl}/api/performance/update`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ log_id: id, result }),
@@ -1517,6 +1561,7 @@ function App() {
   }, []);
 
   const handleAnalyze = async () => {
+    if (loading) return;
     if (!query.trim() && mode === "search") return;
     if (!imgFile && mode === "upload") return;
 
@@ -1611,8 +1656,8 @@ function App() {
 
   const handleRemoveWatchlist = async (ticker) => {
     setWatchlist(prev => prev.filter(w => w.ticker !== ticker));
-    if (BASE_URL) {
-      await fetch(`${BASE_URL}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
+    if (baseUrl) {
+      await fetch(`${baseUrl}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
     }
   };
 
@@ -1721,14 +1766,15 @@ function App() {
                     <div style={{marginTop:16}}>
                       <TradingViewWidget
                         symbol={query.toUpperCase()}
-                        onCapture={BASE_URL ? async (blob, err) => {
+                        onCapture={baseUrl ? async (blob, err) => {
+                          if (loading) return;
                           if (err || !blob) { setError(err || "캡처 실패"); return; }
                           setError(""); setReport(null); setLoading(true); setLoadStep(1);
                           try {
                             const form = new FormData();
                             form.append("file", blob, "capture.png");
                             if (apiKey) form.append("api_key", apiKey);
-                            const resp = await fetch(`${BASE_URL}/api/analyze`, { method: "POST", body: form });
+                            const resp = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: form });
                             if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail); }
                             setLoadStep(2);
                             const data = await resp.json();
@@ -1784,12 +1830,12 @@ function App() {
 
         {/* 비교 탭 */}
         {activeTab === "compare" && (
-          <CompareTab addLog={addLog} />
+          <CompareTab addLog={addLog} baseUrl={baseUrl} />
         )}
 
         {/* 성과 탭 */}
         {activeTab === "performance" && (
-          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} setHistoryModal={setHistoryModal} />
+          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} setHistoryModal={setHistoryModal} baseUrl={baseUrl} />
         )}
 
         {/* 백테스팅 탭 */}
@@ -1814,7 +1860,9 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <ErrorBoundary><App /></ErrorBoundary>
+);
 </script>
 </body>
 </html>
