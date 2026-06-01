@@ -1032,6 +1032,306 @@ function MonitorTab({ watchlist, onAdd, onRemove, monitoring, onToggleMonitor })
   );
 }
 
+// ── P3-2: 백테스팅 탭 ────────────────────────────────────────────────────────
+function BacktestTab() {
+  const [ticker, setTicker] = useState("");
+  const [period, setPeriod] = useState("6mo");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!ticker.trim()) return;
+    if (!BASE_URL && !getBaseUrl()) { setError("백테스팅은 백엔드 서버가 필요합니다"); return; }
+    const bu = getBaseUrl();
+    if (!bu) { setError("백엔드 서버 연결이 필요합니다"); return; }
+    setLoading(true); setError(""); setResult(null);
+    try {
+      const resp = await fetch(`${bu}/api/backtest?ticker=${encodeURIComponent(ticker.trim())}&period=${period}`);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || `오류 ${resp.status}`); }
+      setResult(await resp.json());
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const colorPct = (v) => v > 0 ? "var(--green)" : v < 0 ? "var(--red)" : "var(--text2)";
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">백테스팅 — MA20/MA60 크로스오버</div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16}}>
+          MA20과 MA60의 골든/데드 크로스를 기반으로 과거 데이터에서 전략 성과를 시뮬레이션합니다.
+        </div>
+        <div className="search-wrap">
+          <input className="search-input" placeholder="종목 (AAPL, BTC, 삼성전자...)"
+            value={ticker} onChange={e => setTicker(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !loading && run()} />
+          <select value={period} onChange={e => setPeriod(e.target.value)}
+            style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:14,outline:"none"}}>
+            {[["1mo","1개월"],["3mo","3개월"],["6mo","6개월"],["1y","1년"],["2y","2년"]].map(([v,l]) =>
+              <option key={v} value={v}>{l}</option>
+            )}
+          </select>
+          <button className="btn-primary" onClick={run} disabled={loading || !ticker.trim()}>
+            {loading ? "실행 중..." : "▶ 백테스트"}
+          </button>
+        </div>
+        {error && <div className="error-card" style={{marginTop:12}}>⚠ {error}</div>}
+      </div>
+
+      {loading && (
+        <div className="card" style={{textAlign:"center",padding:"40px"}}>
+          <div className="loader-spinner" /><div style={{color:"var(--text2)",marginTop:12}}>시뮬레이션 실행 중...</div>
+        </div>
+      )}
+
+      {result && (
+        <>
+          <div className="stats-grid" style={{marginBottom:20}}>
+            {[
+              ["총 거래수", result.total_trades+"건", ""],
+              ["승률", result.win_rate+"%", result.win_rate >= 50 ? "var(--green)" : "var(--red)"],
+              ["전략 수익", (result.total_return_pct > 0 ? "+" : "")+result.total_return_pct+"%", colorPct(result.total_return_pct)],
+              ["Buy&Hold", (result.buy_and_hold_pct > 0 ? "+" : "")+result.buy_and_hold_pct+"%", colorPct(result.buy_and_hold_pct)],
+            ].map(([label,val,color]) => (
+              <div key={label} className="stat-card">
+                <div className="stat-label">{label}</div>
+                <div className="stat-value" style={{fontSize:20,color:color||"var(--text)"}}>{val}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card" style={{marginBottom:20}}>
+            <div className="card-title">전략 요약</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:13}}>
+              {[
+                ["전략",result.strategy],["분석 기간",result.period_days+"일"],
+                ["초과 수익",((result.excess_return_pct>0?"+":"")+result.excess_return_pct+"%")+" vs B&H"],
+                ["평균 수익","+"+result.avg_win_pct+"%"],["평균 손실",result.avg_loss_pct+"%"],
+              ].map(([k,v]) => (
+                <React.Fragment key={k}>
+                  <span style={{color:"var(--text2)"}}>{k}</span>
+                  <span style={{fontWeight:500}}>{v}</span>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+
+          {result.trades.length > 0 && (
+            <div className="card">
+              <div className="card-title">최근 거래 내역 (최대 20건)</div>
+              <div className="scroll-area">
+                <table className="log-table">
+                  <thead><tr><th>진입일</th><th>청산일</th><th>진입가</th><th>청산가</th><th>수익률</th><th>결과</th></tr></thead>
+                  <tbody>
+                    {result.trades.map((t, i) => (
+                      <tr key={i}>
+                        <td style={{fontSize:12}}>{t.entry_date}</td>
+                        <td style={{fontSize:12}}>{t.exit_date}</td>
+                        <td style={{fontSize:12}}>{t.entry_price}</td>
+                        <td style={{fontSize:12}}>{t.exit_price}</td>
+                        <td style={{fontWeight:600,color:colorPct(t.return_pct)}}>
+                          {t.return_pct > 0 ? "+" : ""}{t.return_pct}%
+                        </td>
+                        <td><span className={`result-badge ${t.result==="win"?"rb-win":t.result==="loss"?"rb-loss":"rb-pending"}`}>
+                          {t.result==="win"?"✓":t.result==="loss"?"✗":"보유"}
+                        </span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── P3-3: 포트폴리오 탭 ──────────────────────────────────────────────────────
+function PortfolioTab() {
+  const [holdings, setHoldings] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [addForm, setAddForm] = useState({ ticker:"", shares:"", avg_price:"" });
+  const [corrData, setCorrData] = useState(null);
+  const [corrLoading, setCorrLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const bu = getBaseUrl();
+
+  const load = async () => {
+    if (!bu) return;
+    setLoading(true);
+    try {
+      const resp = await fetch(`${bu}/api/portfolio`);
+      const data = await resp.json();
+      setHoldings(data.holdings || []);
+      setSummary(data.summary);
+    } catch {}
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleAdd = async () => {
+    if (!addForm.ticker || !addForm.shares || !addForm.avg_price) return;
+    try {
+      const resp = await fetch(`${bu}/api/portfolio/add`, {
+        method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({ ticker: addForm.ticker, shares: parseFloat(addForm.shares), avg_price: parseFloat(addForm.avg_price) }),
+      });
+      const data = await resp.json();
+      setHoldings(data.holdings || []); setSummary(data.summary);
+      setAddForm({ ticker:"", shares:"", avg_price:"" });
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleRemove = async (ticker) => {
+    try {
+      const resp = await fetch(`${bu}/api/portfolio/${ticker}`, { method:"DELETE" });
+      const data = await resp.json();
+      setHoldings(data.holdings || []); setSummary(data.summary);
+    } catch {}
+  };
+
+  const loadCorr = async () => {
+    if (!bu || holdings.length < 2) return;
+    setCorrLoading(true); setCorrData(null);
+    try {
+      const resp = await fetch(`${bu}/api/portfolio/correlation`);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail); }
+      setCorrData(await resp.json());
+    } catch (e) { setError(e.message); }
+    finally { setCorrLoading(false); }
+  };
+
+  const pnlColor = (v) => v > 0 ? "var(--green)" : v < 0 ? "var(--red)" : "var(--text2)";
+
+  if (!bu) return (
+    <div className="empty"><div className="empty-icon">🏦</div>
+      <div className="empty-text">포트폴리오 기능은 백엔드 서버(localhost:8000)가 필요합니다.<br />설정에서 연동 방식을 변경해주세요.</div></div>
+  );
+
+  return (
+    <div>
+      {summary && (
+        <div className="stats-grid" style={{marginBottom:20}}>
+          {[
+            ["총 평가액", "$"+summary.total_value.toLocaleString(), ""],
+            ["총 매입액", "$"+summary.total_cost.toLocaleString(), ""],
+            ["손익", (summary.total_pnl>=0?"+$":"-$")+Math.abs(summary.total_pnl).toLocaleString(), pnlColor(summary.total_pnl)],
+            ["수익률", (summary.total_pnl_pct>=0?"+":"")+summary.total_pnl_pct+"%", pnlColor(summary.total_pnl_pct)],
+          ].map(([label,val,color]) => (
+            <div key={label} className="stat-card">
+              <div className="stat-label">{label}</div>
+              <div className="stat-value" style={{fontSize:18,color:color||"var(--text)"}}>{val}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">종목 추가</div>
+        <div className="compare-input-row">
+          <input className="compare-ticker-input" placeholder="종목 (AAPL)" value={addForm.ticker}
+            onChange={e => setAddForm(f => ({...f, ticker:e.target.value}))} />
+          <input className="compare-ticker-input" placeholder="수량" type="number" value={addForm.shares}
+            onChange={e => setAddForm(f => ({...f, shares:e.target.value}))} />
+          <input className="compare-ticker-input" placeholder="매입단가" type="number" value={addForm.avg_price}
+            onChange={e => setAddForm(f => ({...f, avg_price:e.target.value}))} />
+          <button className="btn-primary" onClick={handleAdd}>추가</button>
+          <button className="btn-ghost" onClick={load} disabled={loading}>{loading?"로딩...":"🔄 갱신"}</button>
+        </div>
+        {error && <div className="error-card" style={{marginTop:8}}>⚠ {error}</div>}
+      </div>
+
+      {holdings.length === 0 ? (
+        <div className="card"><div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">보유 종목을 추가해주세요</div></div></div>
+      ) : (
+        <div className="card" style={{marginBottom:20}}>
+          <div className="card-title">보유 종목</div>
+          <div className="scroll-area">
+            <table className="log-table">
+              <thead><tr><th>종목</th><th>수량</th><th>매입단가</th><th>현재가</th><th>평가액</th><th>손익</th><th>비중</th><th></th></tr></thead>
+              <tbody>
+                {holdings.map(h => (
+                  <tr key={h.ticker}>
+                    <td><strong>{h.ticker}</strong><div style={{fontSize:11,color:"var(--text2)"}}>{h.name}</div></td>
+                    <td>{h.shares}</td>
+                    <td>${h.avg_price.toLocaleString()}</td>
+                    <td>${h.current_price.toLocaleString()}</td>
+                    <td>${h.current_value.toLocaleString()}</td>
+                    <td style={{color:pnlColor(h.pnl),fontWeight:600}}>
+                      {h.pnl>=0?"+":""}{h.pnl_pct}%
+                    </td>
+                    <td>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{width:40,height:4,background:"var(--bg2)",borderRadius:2,overflow:"hidden"}}>
+                          <div style={{width:`${h.weight_pct}%`,height:"100%",background:"var(--blue)",borderRadius:2}} />
+                        </div>
+                        <span style={{fontSize:11,color:"var(--text2)"}}>{h.weight_pct}%</span>
+                      </div>
+                    </td>
+                    <td><button className="btn-danger" onClick={() => handleRemove(h.ticker)}>제거</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {holdings.length >= 2 && (
+        <div className="card">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div className="card-title" style={{margin:0}}>상관관계 매트릭스 (90일)</div>
+            <button className="btn-ghost" onClick={loadCorr} disabled={corrLoading}>
+              {corrLoading ? "계산 중..." : "📊 계산"}
+            </button>
+          </div>
+          {corrData && (
+            <div className="scroll-area">
+              <table className="log-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    {corrData.tickers.map(t => <th key={t}>{t}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {corrData.matrix.map(row => (
+                    <tr key={row.ticker}>
+                      <td><strong>{row.ticker}</strong></td>
+                      {corrData.tickers.map(t => {
+                        const v = row.correlations[t];
+                        const abs = Math.abs(v);
+                        const bg = v === 1 ? "rgba(59,130,246,.15)"
+                          : abs > 0.7 ? (v > 0 ? "rgba(239,68,68,.12)" : "rgba(34,197,94,.12)")
+                          : abs > 0.4 ? "rgba(245,158,11,.08)" : "transparent";
+                        return (
+                          <td key={t} style={{background:bg,fontWeight: v===1 ? 700 : 400,textAlign:"center",fontSize:12}}>
+                            {v.toFixed(2)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{marginTop:8,fontSize:11,color:"var(--text2)"}}>
+                🔴 강한 양의 상관 (&gt;0.7) · 🟢 강한 음의 상관 (&lt;-0.7) · 🟡 중간 상관
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── API 키 모달 ───────────────────────────────────────────────────────────────
 function ApiKeyModal({ onSave }) {
   const [key, setKey] = useState("");
@@ -1379,7 +1679,7 @@ function App() {
 
       {/* 탭 */}
       <div className="tabs">
-        {[["analysis","📊 분석"],["compare","⚖ 비교"],["performance","📈 성과"],["monitor","👁 모니터"]].map(([id,label]) => (
+        {[["analysis","📊 분석"],["compare","⚖ 비교"],["performance","📈 성과"],["backtest","🔬 백테스트"],["portfolio","🏦 포트폴리오"],["monitor","👁 모니터"]].map(([id,label]) => (
           <button key={id} className={`tab${activeTab===id?" active":""}`} onClick={() => setActiveTab(id)}>{label}</button>
         ))}
       </div>
@@ -1491,6 +1791,12 @@ function App() {
         {activeTab === "performance" && (
           <PerformanceTab logs={logs} onUpdateResult={updateLogResult} setHistoryModal={setHistoryModal} />
         )}
+
+        {/* 백테스팅 탭 */}
+        {activeTab === "backtest" && <BacktestTab />}
+
+        {/* 포트폴리오 탭 */}
+        {activeTab === "portfolio" && <PortfolioTab />}
 
         {/* 모니터 탭 */}
         {activeTab === "monitor" && (

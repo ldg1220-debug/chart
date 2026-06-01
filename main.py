@@ -4,10 +4,12 @@ import csv
 import json
 import os
 import io
+import smtplib
+from email.mime.text import MIMEText
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 import pandas as pd
@@ -26,6 +28,14 @@ FMP_API_KEY        = os.getenv("FMP_API_KEY", "")
 FRED_API_KEY       = os.getenv("FRED_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+SMTP_HOST          = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT          = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER          = os.getenv("SMTP_USER", "")
+SMTP_PASS          = os.getenv("SMTP_PASS", "")
+ALERT_EMAIL        = os.getenv("ALERT_EMAIL", "")
+ALERT_MIN_CONFIDENCE = int(os.getenv("ALERT_MIN_CONFIDENCE", "7"))
+PORTFOLIO_FILE     = Path("portfolio.json")
 
 SONNET_MODEL = "claude-sonnet-4-20250514"
 OPUS_MODEL   = "claude-opus-4-20250514"
@@ -695,7 +705,7 @@ async def analyze_full(q: str = Query(..., description="종목 검색어 (한글
         pass
 
     # 6. Telegram
-    asyncio.create_task(send_telegram_alert(report))
+    asyncio.create_task(send_all_alerts(report))
 
     chart_b64 = base64.standard_b64encode(img_bytes).decode()
     return {"report": report, "chart_image": chart_b64}
@@ -716,7 +726,7 @@ async def analyze_image(
     except Exception:
         pass
 
-    asyncio.create_task(send_telegram_alert(report))
+    asyncio.create_task(send_all_alerts(report))
     chart_b64 = base64.standard_b64encode(img_bytes).decode()
     return {"report": report, "chart_image": chart_b64}
 
@@ -805,7 +815,7 @@ async def _monitor_loop(interval_minutes: int):
                 vision_text = await analyze_chart_vision(img_bytes)
                 report = await generate_report(vision_text, [], {}, ticker, current_price)
                 append_analysis_log(report)
-                await send_telegram_alert(report)
+                await send_all_alerts(report)
             except Exception:
                 continue
 
@@ -967,6 +977,392 @@ async def auto_evaluate_performance():
 async def get_macro():
     data, err = await fetch_macro()
     return {"macro": data, "error": err}
+
+
+# ── P3-1: 알림 확장 (Discord / Email) ────────────────────────────────────────
+async def send_discord_alert(report: dict) -> None:
+    if not DISCORD_WEBHOOK_URL:
+        return
+    strategy = report.get("strategy", {})
+    position   = str(strategy.get("position", "")).lower()
+    confidence = int(strategy.get("confidence", 0) or 0)
+    if position not in ("매수", "buy", "long") or confidence < ALERT_MIN_CONFIDENCE:
+        return
+
+    color = 0x22c55e  # green
+    embed = {
+        "title": f"🚨 Chart Sentinel — {report.get('ticker')} 매수 신호",
+        "color": color,
+        "fields": [
+            {"name": "종목", "value": f"{report.get('name')} ({report.get('ticker')})", "inline": True},
+            {"name": "현재가", "value": str(report.get("current_price", "N/A")), "inline": True},
+            {"name": "확신도", "value": f"{confidence}/10", "inline": True},
+            {"name": "진입", "value": strategy.get("entry_zone", "-"), "inline": True},
+            {"name": "목표", "value": ", ".join(strategy.get("target_prices", ["-"])), "inline": True},
+            {"name": "손절", "value": strategy.get("stop_loss", "-"), "inline": True},
+            {"name": "전략 근거", "value": (strategy.get("rationale", "-") or "-")[:1024]},
+        ],
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            await client.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]})
+        except Exception:
+            pass
+
+
+def _send_email_sync(subject: str, body: str) -> None:
+    msg = MIMEText(body, "html", "utf-8")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = ALERT_EMAIL
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(SMTP_USER, SMTP_PASS)
+        s.send_message(msg)
+
+
+async def send_email_alert(report: dict) -> None:
+    if not (SMTP_USER and SMTP_PASS and ALERT_EMAIL):
+        return
+    strategy   = report.get("strategy", {})
+    position   = str(strategy.get("position", "")).lower()
+    confidence = int(strategy.get("confidence", 0) or 0)
+    if position not in ("매수", "buy", "long") or confidence < ALERT_MIN_CONFIDENCE:
+        return
+
+    subject = f"[Chart Sentinel] {report.get('ticker')} 매수 신호 (확신도 {confidence}/10)"
+    body = f"""
+<h2>🛡 Chart Sentinel 매수 신호</h2>
+<table style="border-collapse:collapse;font-family:sans-serif">
+  <tr><td style="padding:6px 12px;color:#666">종목</td><td style="padding:6px 12px"><b>{report.get('name')} ({report.get('ticker')})</b></td></tr>
+  <tr><td style="padding:6px 12px;color:#666">현재가</td><td style="padding:6px 12px">{report.get('current_price', 'N/A')}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">확신도</td><td style="padding:6px 12px"><b style="color:#22c55e">{confidence}/10</b></td></tr>
+  <tr><td style="padding:6px 12px;color:#666">진입 구간</td><td style="padding:6px 12px">{strategy.get('entry_zone', '-')}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">목표가</td><td style="padding:6px 12px">{', '.join(strategy.get('target_prices', ['-']))}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">손절</td><td style="padding:6px 12px">{strategy.get('stop_loss', '-')}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">R/R</td><td style="padding:6px 12px">{strategy.get('risk_reward', '-')}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">근거</td><td style="padding:6px 12px">{(strategy.get('rationale', '') or '')}</td></tr>
+</table>
+"""
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(executor, _send_email_sync, subject, body)
+    except Exception:
+        pass
+
+
+# P3-1 통합 알림 발송
+async def send_all_alerts(report: dict) -> None:
+    await asyncio.gather(
+        send_telegram_alert(report),
+        send_discord_alert(report),
+        send_email_alert(report),
+        return_exceptions=True,
+    )
+
+
+@app.get("/api/alerts/config")
+async def get_alert_config():
+    return {
+        "telegram": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        "discord":  bool(DISCORD_WEBHOOK_URL),
+        "email":    bool(SMTP_USER and SMTP_PASS and ALERT_EMAIL),
+        "min_confidence": ALERT_MIN_CONFIDENCE,
+    }
+
+
+@app.post("/api/alerts/test")
+async def test_alerts():
+    """설정된 모든 알림 채널로 테스트 메시지 발송."""
+    dummy = {
+        "ticker": "TEST", "name": "테스트 종목", "current_price": "100.00",
+        "strategy": {
+            "position": "매수", "confidence": 10,
+            "entry_zone": "99~101", "stop_loss": "95",
+            "target_prices": ["110", "120"], "risk_reward": "2:1",
+            "rationale": "Chart Sentinel 알림 테스트입니다.",
+        },
+    }
+    await send_all_alerts(dummy)
+    return {"sent": True}
+
+
+# ── P3-2: 백테스팅 ────────────────────────────────────────────────────────────
+def _run_backtest(df: pd.DataFrame, ticker: str) -> dict:
+    """
+    MA20/MA60 크로스오버 전략 시뮬레이션.
+    - 골든크로스 (MA20 > MA60): 매수 시그널 → 다음 날 시가에 진입
+    - 데드크로스  (MA20 < MA60): 청산 → 다음 날 시가에 매도
+    """
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    close  = df["Close"].squeeze().dropna()
+    opens  = df["Open"].squeeze().dropna()
+    ma20   = close.rolling(20).mean()
+    ma60   = close.rolling(60).mean()
+
+    trades: list[dict] = []
+    position = None  # {"entry_date", "entry_price", "signal_date"}
+
+    dates = close.index.tolist()
+    for i in range(1, len(dates)):
+        d     = dates[i]
+        prev  = dates[i - 1]
+        price = opens.get(d, close.iloc[i])
+
+        prev_20 = ma20.get(prev)
+        prev_60 = ma60.get(prev)
+        cur_20  = ma20.get(d)
+        cur_60  = ma60.get(d)
+
+        if None in (prev_20, prev_60, cur_20, cur_60):
+            continue
+        if pd.isna(prev_20) or pd.isna(prev_60) or pd.isna(cur_20) or pd.isna(cur_60):
+            continue
+
+        golden = (prev_20 <= prev_60) and (cur_20 > cur_60)
+        dead   = (prev_20 >= prev_60) and (cur_20 < cur_60)
+
+        if golden and position is None:
+            position = {"entry_date": str(d.date()), "entry_price": float(price)}
+        elif dead and position is not None:
+            exit_price = float(price)
+            ret = (exit_price - position["entry_price"]) / position["entry_price"] * 100
+            trades.append({
+                "entry_date": position["entry_date"],
+                "exit_date":  str(d.date()),
+                "entry_price": round(position["entry_price"], 4),
+                "exit_price":  round(exit_price, 4),
+                "return_pct":  round(ret, 2),
+                "result": "win" if ret > 0 else "loss",
+            })
+            position = None
+
+    # 미청산 포지션 마감
+    if position is not None and len(close) > 0:
+        exit_price = float(close.iloc[-1])
+        ret = (exit_price - position["entry_price"]) / position["entry_price"] * 100
+        trades.append({
+            "entry_date": position["entry_date"],
+            "exit_date":  "보유 중",
+            "entry_price": round(position["entry_price"], 4),
+            "exit_price":  round(exit_price, 4),
+            "return_pct":  round(ret, 2),
+            "result": "open",
+        })
+
+    wins       = [t for t in trades if t["result"] == "win"]
+    losses     = [t for t in trades if t["result"] == "loss"]
+    total_ret  = sum(t["return_pct"] for t in trades if t["result"] != "open")
+    win_rate   = round(len(wins) / max(len([t for t in trades if t["result"] != "open"]), 1) * 100, 1)
+    avg_win    = round(sum(t["return_pct"] for t in wins) / max(len(wins), 1), 2)
+    avg_loss   = round(sum(t["return_pct"] for t in losses) / max(len(losses), 1), 2)
+
+    hold_ret = 0.0
+    if len(close) >= 2:
+        hold_ret = round((float(close.iloc[-1]) - float(close.iloc[0])) / float(close.iloc[0]) * 100, 2)
+
+    return {
+        "ticker": ticker,
+        "strategy": "MA20/MA60 크로스오버",
+        "period_days": len(close),
+        "total_trades": len([t for t in trades if t["result"] != "open"]),
+        "win_rate": win_rate,
+        "total_return_pct": round(total_ret, 2),
+        "avg_win_pct": avg_win,
+        "avg_loss_pct": avg_loss,
+        "buy_and_hold_pct": hold_ret,
+        "excess_return_pct": round(total_ret - hold_ret, 2),
+        "trades": trades[-20:],  # 최근 20건
+    }
+
+
+@app.get("/api/backtest")
+async def backtest(
+    ticker: str = Query(...),
+    period: str = Query("6mo", description="1mo / 3mo / 6mo / 1y / 2y"),
+):
+    sym, asset_type = resolve_ticker(ticker)
+    if asset_type == "crypto":
+        days_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730}
+        df = await fetch_crypto_ohlcv(sym, days=days_map.get(period, 180))
+    else:
+        df = await fetch_stock_data(sym, period=period)
+
+    result = await _run_in_executor(_run_backtest, df, sym)
+    return result
+
+
+# ── P3-3: 포트폴리오 ──────────────────────────────────────────────────────────
+portfolio_data: list[dict] = []
+
+
+def _load_portfolio():
+    global portfolio_data
+    if PORTFOLIO_FILE.exists():
+        try:
+            portfolio_data = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            portfolio_data = []
+
+
+def _save_portfolio():
+    PORTFOLIO_FILE.write_text(json.dumps(portfolio_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class PortfolioItem(BaseModel):
+    ticker: str
+    shares: float
+    avg_price: float
+    name: Optional[str] = ""
+
+
+class PortfolioUpdateRequest(BaseModel):
+    ticker: str
+    shares: Optional[float] = None
+    avg_price: Optional[float] = None
+
+
+async def _get_current_price_simple(ticker: str, asset_type: str) -> float:
+    try:
+        if asset_type == "crypto":
+            return await fetch_crypto_price(ticker)
+        df = await fetch_stock_data(ticker, period="5d")
+        return float(df["Close"].squeeze().iloc[-1])
+    except Exception:
+        return 0.0
+
+
+@app.on_event("startup")
+async def startup():  # type: ignore[no-redef]
+    _ensure_log_file()
+    _load_watchlist()
+    _load_portfolio()
+
+
+@app.get("/api/portfolio")
+async def get_portfolio():
+    if not portfolio_data:
+        return {"holdings": [], "summary": {"total_value": 0, "total_cost": 0, "total_pnl": 0, "total_pnl_pct": 0}}
+
+    tasks = []
+    for item in portfolio_data:
+        sym, atype = resolve_ticker(item["ticker"])
+        tasks.append(_get_current_price_simple(sym, atype))
+
+    prices = await asyncio.gather(*tasks, return_exceptions=True)
+
+    holdings = []
+    total_value = total_cost = 0.0
+
+    for item, price in zip(portfolio_data, prices):
+        cur = float(price) if isinstance(price, (int, float)) and price else item.get("avg_price", 0)
+        cost  = item["shares"] * item["avg_price"]
+        value = item["shares"] * cur
+        pnl   = value - cost
+        pnl_pct = round((cur - item["avg_price"]) / item["avg_price"] * 100, 2) if item["avg_price"] else 0
+
+        total_value += value
+        total_cost  += cost
+
+        holdings.append({
+            **item,
+            "current_price": round(cur, 4),
+            "current_value": round(value, 2),
+            "cost_basis":    round(cost, 2),
+            "pnl":           round(pnl, 2),
+            "pnl_pct":       pnl_pct,
+            "weight_pct":    0,  # 후계산
+        })
+
+    # 비중 계산
+    for h in holdings:
+        h["weight_pct"] = round(h["current_value"] / total_value * 100, 1) if total_value else 0
+
+    total_pnl = total_value - total_cost
+    return {
+        "holdings": holdings,
+        "summary": {
+            "total_value":   round(total_value, 2),
+            "total_cost":    round(total_cost, 2),
+            "total_pnl":     round(total_pnl, 2),
+            "total_pnl_pct": round(total_pnl / total_cost * 100, 2) if total_cost else 0,
+            "positions":     len(holdings),
+        },
+    }
+
+
+@app.post("/api/portfolio/add")
+async def add_portfolio(item: PortfolioItem):
+    sym, _ = resolve_ticker(item.ticker)
+    existing = next((p for p in portfolio_data if p["ticker"] == sym), None)
+    if existing:
+        # 평균 단가 갱신 (매수 평균)
+        total_shares = existing["shares"] + item.shares
+        existing["avg_price"] = round(
+            (existing["shares"] * existing["avg_price"] + item.shares * item.avg_price) / total_shares, 4
+        )
+        existing["shares"] = total_shares
+    else:
+        portfolio_data.append({
+            "ticker": sym,
+            "name": item.name or sym,
+            "shares": item.shares,
+            "avg_price": item.avg_price,
+            "added_at": datetime.utcnow().isoformat(),
+        })
+    _save_portfolio()
+    return await get_portfolio()
+
+
+@app.delete("/api/portfolio/{ticker}")
+async def remove_portfolio(ticker: str):
+    global portfolio_data
+    sym, _ = resolve_ticker(ticker)
+    portfolio_data = [p for p in portfolio_data if p["ticker"] != sym]
+    _save_portfolio()
+    return await get_portfolio()
+
+
+@app.get("/api/portfolio/correlation")
+async def portfolio_correlation():
+    """보유 종목 간 수익률 상관관계 매트릭스 (90일 기준)."""
+    if len(portfolio_data) < 2:
+        raise HTTPException(status_code=400, detail="상관관계 분석을 위해 최소 2개 종목이 필요합니다")
+
+    series_map: dict[str, pd.Series] = {}
+    for item in portfolio_data:
+        sym, atype = resolve_ticker(item["ticker"])
+        try:
+            if atype == "crypto":
+                df = await fetch_crypto_ohlcv(sym, days=90)
+            else:
+                df = await fetch_stock_data(sym, period="3mo")
+            close = df["Close"].squeeze().dropna()
+            returns = close.pct_change().dropna()
+            series_map[sym] = returns
+        except Exception:
+            continue
+
+    if len(series_map) < 2:
+        raise HTTPException(status_code=502, detail="데이터를 불러올 수 없는 종목이 있습니다")
+
+    aligned = pd.DataFrame(series_map).dropna()
+    corr    = aligned.corr().round(3)
+
+    matrix = []
+    tickers = corr.columns.tolist()
+    for t1 in tickers:
+        row = []
+        for t2 in tickers:
+            row.append(float(corr.loc[t1, t2]))
+        matrix.append({"ticker": t1, "correlations": dict(zip(tickers, row))})
+
+    return {"tickers": tickers, "matrix": matrix}
 
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────
