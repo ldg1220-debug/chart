@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# 런타임 자동 생성 파일
+analysis_logs.csv
+watchlist.json
+portfolio.json
