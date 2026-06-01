@@ -8,6 +8,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     :root {
       --bg0: #0d1117; --bg1: #161b22; --bg2: #21262d;
@@ -220,6 +221,41 @@
     .auto-eval-result { background: var(--bg2); border-radius: 8px; padding: 12px 16px; margin-top: 12px; font-size: 13px; }
     .auto-eval-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); }
     .auto-eval-item:last-child { border-bottom: none; }
+
+    /* 검색 자동완성 (P2-2) */
+    .autocomplete-wrap { position: relative; flex: 1; }
+    .autocomplete-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; margin-top: 4px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+    .autocomplete-item { padding: 9px 14px; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; }
+    .autocomplete-item:hover, .autocomplete-item.active { background: var(--bg2); }
+    .autocomplete-tag { font-size: 11px; color: var(--text2); }
+
+    /* 내보내기 버튼 (P2-2) */
+    .export-btn { background: rgba(59,130,246,.1); color: var(--blue); border: 1px solid rgba(59,130,246,.25); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; transition: all .15s; }
+    .export-btn:hover { background: rgba(59,130,246,.2); }
+    .export-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* 히스토리 모달 (P2-2) */
+    .history-modal { background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 28px; width: 95%; max-width: 680px; max-height: 85vh; overflow-y: auto; }
+    .log-row-clickable { cursor: pointer; }
+    .log-row-clickable:hover td { background: rgba(59,130,246,.06) !important; }
+
+    /* 설정 드로어 (P2-3) */
+    .settings-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 320px; background: var(--bg1); border-left: 1px solid var(--border); z-index: 200; padding: 24px; transform: translateX(100%); transition: transform .25s ease; }
+    .settings-drawer.open { transform: translateX(0); }
+    .settings-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 190; }
+    .settings-title { font-size: 16px; font-weight: 700; margin-bottom: 20px; }
+    .settings-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+    .settings-input { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 13px; outline: none; margin-bottom: 16px; }
+    .settings-input:focus { border-color: var(--blue); }
+    .settings-radio-group { display: flex; gap: 8px; margin-bottom: 16px; }
+    .settings-radio-btn { flex: 1; padding: 8px; border-radius: 8px; font-size: 13px; border: 1px solid var(--border); background: var(--bg2); color: var(--text2); transition: all .15s; text-align: center; }
+    .settings-radio-btn.selected { border-color: var(--blue); background: rgba(59,130,246,.1); color: var(--blue); font-weight: 600; }
+    .settings-section { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .settings-section:last-child { border-bottom: none; }
+
+    /* 토스트 알림 */
+    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; padding: 10px 18px; font-size: 13px; z-index: 300; box-shadow: 0 4px 16px rgba(0,0,0,.4); animation: fadeInUp .2s ease; pointer-events: none; }
+    @keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(8px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
   </style>
 </head>
 <body>
@@ -230,11 +266,40 @@ const { useState, useEffect, useRef, useCallback } = React;
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 const QUICK_TICKERS = ["NVDA", "AAPL", "TSLA", "BTC", "ETH", "삼성전자"];
-const BASE_URL = (() => {
+const ANTHROPIC_DIRECT = "https://api.anthropic.com/v1/messages";
+
+// P2-3: 동적 BASE_URL — 설정에서 오버라이드 가능
+function getBaseUrl() {
+  const saved = ls_get("cs_backend_url", null);
+  if (saved === "direct") return null;
+  if (saved) return saved;
   if (window.location.protocol === "file:") return null;
   return window.location.origin;
-})();
-const ANTHROPIC_DIRECT = "https://api.anthropic.com/v1/messages";
+}
+
+// P2-2: 자동완성 데이터
+const AUTOCOMPLETE_TICKERS = [
+  { symbol: "NVDA", name: "NVIDIA", tag: "반도체" },
+  { symbol: "AAPL", name: "Apple", tag: "빅테크" },
+  { symbol: "TSLA", name: "Tesla", tag: "전기차" },
+  { symbol: "MSFT", name: "Microsoft", tag: "빅테크" },
+  { symbol: "GOOGL", name: "Alphabet", tag: "빅테크" },
+  { symbol: "AMZN", name: "Amazon", tag: "빅테크" },
+  { symbol: "META", name: "Meta", tag: "소셜" },
+  { symbol: "NFLX", name: "Netflix", tag: "미디어" },
+  { symbol: "AMD", name: "AMD", tag: "반도체" },
+  { symbol: "INTC", name: "Intel", tag: "반도체" },
+  { symbol: "BTC", name: "Bitcoin", tag: "코인" },
+  { symbol: "ETH", name: "Ethereum", tag: "코인" },
+  { symbol: "SOL", name: "Solana", tag: "코인" },
+  { symbol: "XRP", name: "Ripple", tag: "코인" },
+  { symbol: "DOGE", name: "Dogecoin", tag: "코인" },
+  { symbol: "삼성전자", name: "Samsung Electronics", tag: "한국" },
+  { symbol: "SK하이닉스", name: "SK Hynix", tag: "한국" },
+  { symbol: "네이버", name: "NAVER", tag: "한국" },
+  { symbol: "카카오", name: "Kakao", tag: "한국" },
+  { symbol: "현대차", name: "Hyundai Motor", tag: "한국" },
+];
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -311,6 +376,136 @@ function TradingViewWidget({ symbol, onCapture }) {
   );
 }
 
+// ── P2-2: 검색 자동완성 ───────────────────────────────────────────────────────
+function SearchAutocomplete({ value, onChange, onSelect, onSubmit, loading, prevTickers }) {
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const inputRef = useRef(null);
+
+  const q = value.trim().toLowerCase();
+  const suggestions = q.length < 1 ? [] : [
+    ...AUTOCOMPLETE_TICKERS.filter(t =>
+      t.symbol.toLowerCase().startsWith(q) || t.name.toLowerCase().includes(q)
+    ).slice(0, 5),
+    ...prevTickers
+      .filter(t => t.toLowerCase().startsWith(q) && !AUTOCOMPLETE_TICKERS.find(a => a.symbol === t))
+      .slice(0, 3)
+      .map(t => ({ symbol: t, name: "", tag: "이전" })),
+  ].slice(0, 7);
+
+  const handleKey = (e) => {
+    if (!open || suggestions.length === 0) {
+      if (e.key === "Enter") { onSubmit(); setOpen(false); }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i+1, suggestions.length-1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx(i => Math.max(i-1, -1)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIdx >= 0) { onSelect(suggestions[activeIdx].symbol); setOpen(false); }
+      else { onSubmit(); setOpen(false); }
+    } else if (e.key === "Escape") { setOpen(false); }
+  };
+
+  return (
+    <div className="autocomplete-wrap">
+      <input className="search-input"
+        ref={inputRef}
+        placeholder="종목 검색 (NVDA, BTC, 삼성전자...)"
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true); setActiveIdx(-1); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={handleKey}
+      />
+      {open && suggestions.length > 0 && (
+        <div className="autocomplete-list">
+          {suggestions.map((s, i) => (
+            <div key={s.symbol}
+              className={`autocomplete-item${i === activeIdx ? " active" : ""}`}
+              onMouseDown={() => { onSelect(s.symbol); setOpen(false); }}>
+              <span><strong>{s.symbol}</strong>{s.name ? ` — ${s.name}` : ""}</span>
+              <span className="autocomplete-tag">{s.tag}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── P2-2: 리포트 내보내기 ─────────────────────────────────────────────────────
+async function exportReportAsPng(reportEl, ticker) {
+  if (typeof html2canvas === "undefined") { alert("html2canvas 로딩 중..."); return; }
+  const canvas = await html2canvas(reportEl, {
+    backgroundColor: "#161b22", scale: 2, logging: false, useCORS: true,
+  });
+  const link = document.createElement("a");
+  link.download = `chart-sentinel-${ticker}-${new Date().toISOString().slice(0,10)}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+}
+
+// ── P2-3: 설정 드로어 ─────────────────────────────────────────────────────────
+function SettingsDrawer({ open, onClose, settings, onSave }) {
+  const [mode, setMode] = useState(settings.mode || "auto");
+  const [backendUrl, setBackendUrl] = useState(settings.backendUrl || "http://localhost:8000");
+  const [apiKey, setApiKey] = useState(settings.apiKey || "");
+
+  const handleSave = () => {
+    onSave({ mode, backendUrl, apiKey });
+    onClose();
+  };
+
+  return (
+    <>
+      {open && <div className="settings-overlay" onClick={onClose} />}
+      <div className={`settings-drawer${open ? " open" : ""}`}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div className="settings-title">⚙ 설정</div>
+          <button className="btn-ghost" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-label">API 연동 방식</div>
+          <div className="settings-radio-group">
+            {[["auto","자동 감지"],["backend","로컬 백엔드"],["direct","직접 호출"]].map(([v,l]) => (
+              <button key={v} className={`settings-radio-btn${mode===v?" selected":""}`}
+                onClick={() => setMode(v)}>{l}</button>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:"var(--text2)",lineHeight:1.5}}>
+            {mode === "auto" && "서버 실행 여부에 따라 자동 선택"}
+            {mode === "backend" && "로컬 FastAPI 서버를 통해 분석 (Plotly 차트, CSV 로깅, 텔레그램 알림 활성화)"}
+            {mode === "direct" && "브라우저에서 Anthropic API 직접 호출 (텍스트 분석만 가능)"}
+          </div>
+        </div>
+
+        {mode === "backend" && (
+          <div className="settings-section">
+            <div className="settings-label">백엔드 서버 URL</div>
+            <input className="settings-input" value={backendUrl}
+              onChange={e => setBackendUrl(e.target.value)}
+              placeholder="http://localhost:8000" />
+          </div>
+        )}
+
+        <div className="settings-section">
+          <div className="settings-label">Anthropic API 키</div>
+          <input className="settings-input" type="password" value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder="sk-ant-api03-..." />
+          <div style={{fontSize:12,color:"var(--text2)"}}>
+            직접 호출 모드 또는 백엔드 없이 브라우저에서 사용 시 필요합니다
+          </div>
+        </div>
+
+        <button className="btn-primary" style={{width:"100%"}} onClick={handleSave}>저장</button>
+      </div>
+    </>
+  );
+}
+
 // ── 이미지 드롭존 ─────────────────────────────────────────────────────────────
 function ImageDropzone({ onFile, preview }) {
   const [drag, setDrag] = useState(false);
@@ -360,8 +555,10 @@ function Loader({ step }) {
   );
 }
 
-// ── 리포트 카드 ───────────────────────────────────────────────────────────────
+// ── 리포트 카드 (P2-2: 내보내기 포함) ──────────────────────────────────────
 function ReportCard({ report, chartImage, logId, onResult }) {
+  const cardRef = useRef(null);
+  const [exporting, setExporting] = useState(false);
   const tech = report.technical_analysis || {};
   const fund = report.fundamental_analysis || {};
   const strat = report.strategy || {};
@@ -369,14 +566,27 @@ function ReportCard({ report, chartImage, logId, onResult }) {
   const bClass   = badgeClass(strat.position);
   const conf = parseInt(strat.confidence) || 0;
 
+  const handleExport = async () => {
+    if (!cardRef.current) return;
+    setExporting(true);
+    try { await exportReportAsPng(cardRef.current, report.ticker || "report"); }
+    catch (e) { alert("내보내기 실패: " + e.message); }
+    finally { setExporting(false); }
+  };
+
   return (
-    <div>
+    <div ref={cardRef}>
       <div className="report-header">
         <div>
           <div className="report-name">{report.name || report.ticker}</div>
           <div className="report-ticker">{report.ticker} · {report.timeframe}</div>
         </div>
-        <div className="report-price">{report.current_price}</div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+          <div className="report-price">{report.current_price}</div>
+          <button className="export-btn" onClick={handleExport} disabled={exporting}>
+            {exporting ? "저장 중..." : "⬇ PNG 저장"}
+          </button>
+        </div>
       </div>
 
       {chartImage && (
@@ -422,7 +632,7 @@ function ReportCard({ report, chartImage, logId, onResult }) {
 }
 
 // ── 성과 탭 (P1-2: 자동 검증 포함) ──────────────────────────────────────────
-function PerformanceTab({ logs, onUpdateResult }) {
+function PerformanceTab({ logs, onUpdateResult, setHistoryModal }) {
   const [autoEvalLoading, setAutoEvalLoading] = useState(false);
   const [autoEvalResult, setAutoEvalResult] = useState(null);
   const evaluated = logs.filter(l => l.result === "win" || l.result === "loss");
@@ -541,7 +751,10 @@ function PerformanceTab({ logs, onUpdateResult }) {
       )}
 
       <div className="card">
-        <div className="card-title">최근 분석 기록</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div className="card-title" style={{margin:0}}>최근 분석 기록</div>
+          <div style={{fontSize:12,color:"var(--text2)"}}>행 클릭 → 리포트 재보기</div>
+        </div>
         {logs.length === 0 ? (
           <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">아직 분석 기록이 없습니다</div></div>
         ) : (
@@ -555,7 +768,8 @@ function PerformanceTab({ logs, onUpdateResult }) {
               </thead>
               <tbody>
                 {logs.map(l => (
-                  <tr key={l.id}>
+                  <tr key={l.id} className="log-row-clickable"
+                    onClick={() => l._report && setHistoryModal({ report: l._report, chart: l._chart })}>
                     <td><strong>{l.ticker}</strong></td>
                     <td><span className={`pos-badge ${badgeClass(l.position)}`} style={{fontSize:11,padding:"2px 8px"}}>{l.position||"-"}</span></td>
                     <td>{l.confidence||"-"}</td>
@@ -566,7 +780,7 @@ function PerformanceTab({ logs, onUpdateResult }) {
                         {l.result==="win"?"✓ Win":l.result==="loss"?"✗ Loss":"대기"}
                       </span>
                     </td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       {l.result === "pending" && (
                         <div className="wl-sm">
                           <button className="bw" onClick={() => onUpdateResult(l.id, "win")}>W</button>
@@ -908,6 +1122,12 @@ async function analyzeDirectly(query, apiKey) {
 
 // ── 메인 앱 ───────────────────────────────────────────────────────────────────
 function App() {
+  // P2-3: 설정 상태
+  const [settings, setSettings] = useState(() => ls_get("cs_settings", { mode: "auto", backendUrl: "http://localhost:8000", apiKey: "" }));
+  const [showSettings, setShowSettings] = useState(false);
+  const baseUrl = settings.mode === "direct" ? null : settings.mode === "backend" ? settings.backendUrl : getBaseUrl();
+  const effectiveApiKey = settings.apiKey || ls_get("cs_api_key", "");
+
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [apiKey, setApiKey] = useState(() => ls_get("cs_api_key", ""));
   const [logs, setLogs] = useState(() => ls_get("cs_logs", []));
@@ -926,8 +1146,20 @@ function App() {
   const [currentLogId, setCurrentLogId] = useState(null);
   const [error, setError] = useState("");
 
+  // P2-2: 히스토리 모달 + 토스트
+  const [historyModal, setHistoryModal] = useState(null); // { report, chartImage }
+  const [toast, setToast] = useState("");
+
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2500);
+  };
+
+  // P2-2: 이전 분석 종목 목록 (자동완성용)
+  const prevTickers = [...new Set(logs.map(l => l.ticker).filter(Boolean))];
+
   useEffect(() => {
-    if (!apiKey && !BASE_URL) setShowKeyModal(true);
+    if (!effectiveApiKey && !baseUrl) setShowKeyModal(true);
   }, []);
 
   const saveApiKey = (key) => {
@@ -936,8 +1168,14 @@ function App() {
     setShowKeyModal(false);
   };
 
-  // P0-1: localStorage 영속화
-  const addLog = useCallback((rep) => {
+  const saveSettings = (s) => {
+    setSettings(s);
+    ls_set("cs_settings", s);
+    if (s.apiKey) { setApiKey(s.apiKey); ls_set("cs_api_key", s.apiKey); }
+  };
+
+  // P0-1 + P2-2: localStorage 영속화 + full report 저장
+  const addLog = useCallback((rep, imgB64) => {
     const entry = {
       id: String(Date.now()),
       timestamp: new Date().toISOString(),
@@ -951,6 +1189,8 @@ function App() {
       current_price: rep.current_price || "",
       timeframe: rep.timeframe || "",
       result: "pending",
+      _report: rep,
+      _chart: imgB64 || null,
     };
     setLogs(prev => {
       const updated = [entry, ...prev].slice(0, 100);
@@ -991,8 +1231,8 @@ function App() {
         setLoadStep(0);
         let result;
 
-        if (BASE_URL) {
-          const resp = await fetch(`${BASE_URL}/api/analyze-full?q=${encodeURIComponent(query.trim())}`);
+        if (baseUrl) {
+          const resp = await fetch(`${baseUrl}/api/analyze-full?q=${encodeURIComponent(query.trim())}`);
           if (!resp.ok) {
             const e = await resp.json();
             throw new Error(e.detail || `서버 오류 ${resp.status}`);
@@ -1002,29 +1242,30 @@ function App() {
           setLoadStep(2);
           result = data.report;
           setChartImage(data.chart_image || null);
+          const id = addLog(result, data.chart_image || null);
+          setCurrentLogId(id);
         } else {
-          if (!apiKey) { setShowKeyModal(true); return; }
+          if (!effectiveApiKey) { setShowKeyModal(true); return; }
           setLoadStep(1);
-          result = await analyzeDirectly(query.trim(), apiKey);
+          result = await analyzeDirectly(query.trim(), effectiveApiKey);
           setLoadStep(2);
+          const id = addLog(result, null);
+          setCurrentLogId(id);
         }
-
         setReport(result);
-        const id = addLog(result);
-        setCurrentLogId(id);
 
       } else {
         // 이미지 업로드 모드
-        if (!BASE_URL) {
+        if (!baseUrl) {
           setError("이미지 분석은 백엔드 서버(localhost:8000)가 필요합니다.");
           return;
         }
         setLoadStep(0);
         const form = new FormData();
         form.append("file", imgFile);
-        if (apiKey) form.append("api_key", apiKey);
+        if (effectiveApiKey) form.append("api_key", effectiveApiKey);
 
-        const resp = await fetch(`${BASE_URL}/api/analyze`, { method: "POST", body: form });
+        const resp = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: form });
         if (!resp.ok) {
           const e = await resp.json();
           throw new Error(e.detail || `서버 오류 ${resp.status}`);
@@ -1033,7 +1274,7 @@ function App() {
         const data = await resp.json();
         setReport(data.report);
         setChartImage(data.chart_image || null);
-        const id = addLog(data.report);
+        const id = addLog(data.report, data.chart_image || null);
         setCurrentLogId(id);
       }
     } catch (e) {
@@ -1059,8 +1300,8 @@ function App() {
   const handleAddWatchlist = async (ticker) => {
     const item = { ticker: ticker.toUpperCase(), name: ticker, added_at: new Date().toISOString() };
     setWatchlist(prev => [...prev.filter(w => w.ticker !== item.ticker), item]);
-    if (BASE_URL) {
-      await fetch(`${BASE_URL}/api/watchlist`, {
+    if (baseUrl) {
+      await fetch(`${baseUrl}/api/watchlist`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ticker, name: ticker }),
@@ -1076,12 +1317,12 @@ function App() {
   };
 
   const handleToggleMonitor = async () => {
-    if (!BASE_URL) { setError("모니터 기능은 백엔드 서버가 필요합니다."); return; }
+    if (!baseUrl) { setError("모니터 기능은 백엔드 서버가 필요합니다."); return; }
     if (monitoring) {
-      await fetch(`${BASE_URL}/api/monitor/stop`, { method: "POST" }).catch(() => {});
+      await fetch(`${baseUrl}/api/monitor/stop`, { method: "POST" }).catch(() => {});
       setMonitoring(false);
     } else {
-      await fetch(`${BASE_URL}/api/monitor/start`, {
+      await fetch(`${baseUrl}/api/monitor/start`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ interval_minutes: 60 }),
@@ -1090,9 +1331,36 @@ function App() {
     }
   };
 
+  const handleRemoveWatchlist2 = async (ticker) => {
+    setWatchlist(prev => prev.filter(w => w.ticker !== ticker));
+    if (baseUrl) {
+      await fetch(`${baseUrl}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
+    }
+  };
+
   return (
     <div className="app">
       {showKeyModal && <ApiKeyModal onSave={saveApiKey} />}
+
+      {/* P2-3: 설정 드로어 */}
+      <SettingsDrawer open={showSettings} onClose={() => setShowSettings(false)}
+        settings={{...settings, apiKey: effectiveApiKey}} onSave={saveSettings} />
+
+      {/* P2-2: 히스토리 재보기 모달 */}
+      {historyModal && (
+        <div className="modal-bg" onClick={() => setHistoryModal(null)}>
+          <div className="history-modal" onClick={e => e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+              <strong style={{fontSize:15}}>이전 분석 — {historyModal.report?.ticker}</strong>
+              <button className="btn-ghost" onClick={() => setHistoryModal(null)}>✕ 닫기</button>
+            </div>
+            <ReportCard report={historyModal.report} chartImage={historyModal.chart} logId={null} onResult={null} />
+          </div>
+        </div>
+      )}
+
+      {/* 토스트 */}
+      {toast && <div className="toast">{toast}</div>}
 
       {/* 헤더 */}
       <div className="header">
@@ -1101,10 +1369,11 @@ function App() {
           Chart Sentinel
         </div>
         <div className="header-right">
-          <span className={`api-status ${apiKey || BASE_URL ? "api-ok" : "api-bad"}`}>
-            {BASE_URL ? "🟢 서버 연결" : apiKey ? "🟡 직접 호출" : "⚠ 키 없음"}
+          <span className={`api-status ${effectiveApiKey || baseUrl ? "api-ok" : "api-bad"}`}>
+            {baseUrl ? "🟢 서버 연결" : effectiveApiKey ? "🟡 직접 호출" : "⚠ 키 없음"}
           </span>
-          <button className="btn-ghost" onClick={() => setShowKeyModal(true)}>API 키 설정</button>
+          <button className="btn-ghost" onClick={() => setShowSettings(true)}>⚙ 설정</button>
+          <button className="btn-ghost" onClick={() => setShowKeyModal(true)}>API 키</button>
         </div>
       </div>
 
@@ -1131,11 +1400,14 @@ function App() {
               {mode === "search" ? (
                 <>
                   <div className="search-wrap">
-                    <input className="search-input"
-                      placeholder="종목 검색 (NVDA, BTC, 삼성전자...)"
+                    <SearchAutocomplete
                       value={query}
-                      onChange={e => setQuery(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && !loading && handleAnalyze()} />
+                      onChange={setQuery}
+                      onSelect={(sym) => { setQuery(sym); }}
+                      onSubmit={handleAnalyze}
+                      loading={loading}
+                      prevTickers={prevTickers}
+                    />
                     <button className="btn-primary" onClick={handleAnalyze} disabled={loading || !query.trim()}>
                       {loading ? "분석 중..." : "분석"}
                     </button>
@@ -1217,7 +1489,7 @@ function App() {
 
         {/* 성과 탭 */}
         {activeTab === "performance" && (
-          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} />
+          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} setHistoryModal={setHistoryModal} />
         )}
 
         {/* 모니터 탭 */}

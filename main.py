@@ -97,7 +97,10 @@ async def fetch_stock_data(ticker: str, period: str = "3mo") -> pd.DataFrame:
         try:
             df = await _run_in_executor(_fetch_yf, ticker, period)
             if df is None or df.empty:
-                raise ValueError(f"No data returned for {ticker}")
+                raise ValueError(
+                    f"'{ticker}'에 대한 데이터가 없습니다. "
+                    "종목 코드를 확인하거나 상장폐지된 종목일 수 있습니다."
+                )
             return df
         except Exception as e:
             last_exc = e
@@ -106,16 +109,34 @@ async def fetch_stock_data(ticker: str, period: str = "3mo") -> pd.DataFrame:
     raise HTTPException(status_code=502, detail=f"Failed to fetch data for {ticker}: {last_exc}")
 
 
+async def _coingecko_get(url: str, params: dict, timeout: int = 15) -> dict | list:
+    """CoinGecko GET with 429 rate-limit retry (max 3회, backoff 최대 60s)."""
+    for attempt in range(3):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 429:
+                    wait = min(int(resp.headers.get("Retry-After", 30)) , 60)
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                if attempt == 2:
+                    raise HTTPException(status_code=502, detail=f"CoinGecko HTTP error: {e}")
+                await asyncio.sleep(2 ** attempt)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"CoinGecko error: {e}")
+    raise HTTPException(status_code=429, detail="CoinGecko rate limit — 잠시 후 다시 시도하세요")
+
+
 async def fetch_crypto_ohlcv(coin_id: str, days: int = 90) -> pd.DataFrame:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
-    params = {"vs_currency": "usd", "days": days}
-    async with httpx.AsyncClient(timeout=15) as client:
-        try:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"CoinGecko error: {e}")
+    data = await _coingecko_get(url, {"vs_currency": "usd", "days": days})
+    if not data:
+        raise HTTPException(status_code=404, detail=f"'{coin_id}' OHLCV 데이터가 없습니다. 코인 ID를 확인하세요.")
     rows = [{"Date": datetime.fromtimestamp(r[0] / 1000),
              "Open": r[1], "High": r[2], "Low": r[3], "Close": r[4]} for r in data]
     df = pd.DataFrame(rows).set_index("Date")
@@ -124,15 +145,14 @@ async def fetch_crypto_ohlcv(coin_id: str, days: int = 90) -> pd.DataFrame:
 
 
 async def fetch_crypto_price(coin_id: str) -> float:
-    url = f"https://api.coingecko.com/api/v3/simple/price"
-    params = {"ids": coin_id, "vs_currencies": "usd"}
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json().get(coin_id, {}).get("usd", 0.0)
-        except Exception:
-            return 0.0
+    try:
+        data = await _coingecko_get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            {"ids": coin_id, "vs_currencies": "usd"}, timeout=10
+        )
+        return data.get(coin_id, {}).get("usd", 0.0)
+    except Exception:
+        return 0.0
 
 
 async def fetch_news(ticker: str) -> tuple[list[dict], str]:
