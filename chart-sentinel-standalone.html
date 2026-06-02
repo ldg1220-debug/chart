@@ -106,17 +106,31 @@ tr:hover td{background:#0f172a}
 .tab-inner-btn{padding:6px 12px;border:1px solid #334155;border-radius:6px;background:transparent;color:#64748b;cursor:pointer;font-size:.8rem;transition:all .2s}
 .tab-inner-btn.active{background:#334155;color:#e2e8f0}
 </style>
+<!-- ══════════════════════════════════════════════════
+     ★ 배포자 설정 — 여기만 수정하세요
+     aistudio.google.com/apikey 에서 발급한 키를 붙여넣으세요.
+     키가 입력되면 사용자에게 입력창이 표시되지 않습니다.
+     ══════════════════════════════════════════════════ -->
+<script>
+window.DEPLOY_CONFIG = {
+  GOOGLE_API_KEY: '',          // 예: 'AIzaSyXXXXXXXXXXXXXXXXXX'
+  APP_TITLE:      'Chart Sentinel',   // 헤더에 표시할 앱 이름 (선택)
+};
+</script>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback,useMemo} = React;
 
+// ─── 배포 설정 읽기 (window.DEPLOY_CONFIG 우선, 없으면 localStorage)
+const DEPLOY_KEY = window.DEPLOY_CONFIG?.GOOGLE_API_KEY?.trim() || '';
+const APP_TITLE  = window.DEPLOY_CONFIG?.APP_TITLE || 'Chart Sentinel';
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 const YF_PROXY  = 'https://corsproxy.io/?url=';
 const CG_BASE   = 'https://api.coingecko.com/api/v3';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-// 비전(이미지 분석): gemini-2.0-flash / 리포트: gemini-2.0-flash
 const GEMINI_VISION_MODEL = 'gemini-2.0-flash';
 const GEMINI_REPORT_MODEL = 'gemini-2.0-flash';
 
@@ -346,8 +360,15 @@ async function generateChartImage(ohlcv, ticker) {
 }
 
 // ─── Google Gemini API ────────────────────────────────────────────────────────
+// DEPLOY_KEY(배포자 설정) → userApiKey(localStorage) 순으로 사용
+function resolveApiKey(userApiKey) {
+  return DEPLOY_KEY || userApiKey || '';
+}
+
 async function callGemini(model, parts, apiKey) {
-  if(!apiKey) throw new Error('Google API 키가 없습니다. 우측 상단 ⚙️ 에서 입력해주세요.\n발급: aistudio.google.com');
+  const key = resolveApiKey(apiKey);
+  if(!key) throw new Error('Google API 키가 없습니다. 우측 상단 ⚙️ 에서 입력해주세요.\n발급: aistudio.google.com/apikey');
+  apiKey = key;
   const url = `${GEMINI_BASE}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const resp = await fetch(url, {
     method: 'POST',
@@ -1609,7 +1630,9 @@ function App() {
   const [showApiModal, setShowApiModal] = useState(false);
 
   useEffect(()=>{
-    if(!loadSettings().apiKey) setShowApiModal(true);
+    // DEPLOY_KEY가 있으면 → 모달 표시 안 함 (배포자가 미리 설정)
+    // DEPLOY_KEY가 없고 localStorage에도 없으면 → 사용자가 직접 입력
+    if(!DEPLOY_KEY && !loadSettings().apiKey) setShowApiModal(true);
   },[]);
 
   const handleApiSave = key => {
@@ -1623,6 +1646,9 @@ function App() {
     setShowSettings(false);
   };
 
+  // 실제 사용되는 키: DEPLOY_KEY 우선, 없으면 사용자 설정
+  const activeKey = DEPLOY_KEY || settings.apiKey;
+
   const TABS = [
     {id:'analysis',  label:'📊 분석'},
     {id:'compare',   label:'⚖ 비교'},
@@ -1632,7 +1658,9 @@ function App() {
     {id:'monitor',   label:'👁 모니터'},
   ];
 
-  const statusBadge = settings.apiKey ? (
+  const statusBadge = DEPLOY_KEY ? (
+    <span className="badge badge-green" style={{fontSize:'.75rem'}}>✅ AI 준비됨</span>
+  ) : activeKey ? (
     <span className="badge badge-green" style={{fontSize:'.75rem'}}>🔑 Google AI 연결됨</span>
   ) : (
     <span className="badge badge-red" style={{fontSize:'.75rem',cursor:'pointer'}} onClick={()=>setShowApiModal(true)}>API 키 없음 (클릭)</span>
@@ -1642,12 +1670,15 @@ function App() {
     <ErrorBoundary>
       <div className="app-header">
         <div>
-          <h1>Chart Sentinel</h1>
+          <h1>{APP_TITLE}</h1>
           <div className="subtitle">AI 차트 분석 · Google Gemini · 서버 불필요</div>
         </div>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           {statusBadge}
-          <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.85rem'}} onClick={()=>setShowSettings(true)}>⚙️</button>
+          {/* DEPLOY_KEY 배포 시엔 설정 버튼 숨김 (키 노출 방지) */}
+          {!DEPLOY_KEY && (
+            <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.85rem'}} onClick={()=>setShowSettings(true)}>⚙️</button>
+          )}
         </div>
       </div>
 
@@ -1658,12 +1689,12 @@ function App() {
       </div>
 
       <div className="main-content">
-        {tab==='analysis'    && <AnalysisTab    apiKey={settings.apiKey} settings={settings} serverHasKey={false}/>}
-        {tab==='compare'     && <CompareTab     apiKey={settings.apiKey} serverHasKey={false}/>}
-        {tab==='performance' && <PerformanceTab apiKey={settings.apiKey} serverHasKey={false}/>}
+        {tab==='analysis'    && <AnalysisTab    apiKey={activeKey} settings={settings} serverHasKey={false}/>}
+        {tab==='compare'     && <CompareTab     apiKey={activeKey} serverHasKey={false}/>}
+        {tab==='performance' && <PerformanceTab apiKey={activeKey} serverHasKey={false}/>}
         {tab==='backtest'    && <BacktestTab/>}
         {tab==='portfolio'   && <PortfolioTab/>}
-        {tab==='monitor'     && <MonitorTab     apiKey={settings.apiKey} settings={settings} serverHasKey={false}/>}
+        {tab==='monitor'     && <MonitorTab     apiKey={activeKey} settings={settings} serverHasKey={false}/>}
       </div>
 
       {showSettings && <SettingsDrawer settings={settings} onSave={handleSettingsSave} onClose={()=>setShowSettings(false)} serverHasKey={false}/>}
