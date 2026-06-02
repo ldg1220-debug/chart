@@ -113,78 +113,12 @@ tr:hover td{background:#0f172a}
 const {useState,useEffect,useRef,useCallback,useMemo} = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const YF_PROXY = 'https://corsproxy.io/?url=';
-const CG_BASE  = 'https://api.coingecko.com/api/v3';
-const ANTHROPIC_DIRECT = 'anthropic-dangerous-direct-browser-access';
-
-// 백엔드 자동 감지: 같은 origin에서 서빙되면 /api/server-status를 통해 확인
-let _backendOrigin = null;  // null = 아직 미확인, '' = 없음, 'http://...' = 있음
-let _serverHasKey  = false;
-
-async function detectBackend() {
-  if(_backendOrigin !== null) return;
-  // 1순위: 같은 origin (배포 환경)
-  try {
-    const r = await fetch('/api/server-status', {signal: AbortSignal.timeout(1500)});
-    if(r.ok) {
-      const d = await r.json();
-      _backendOrigin = window.location.origin;
-      _serverHasKey  = d.hasApiKey;
-      return;
-    }
-  } catch {}
-  // 2순위: localhost:8000 (로컬 개발)
-  try {
-    const r = await fetch('http://localhost:8000/api/server-status', {signal: AbortSignal.timeout(1500)});
-    if(r.ok) {
-      const d = await r.json();
-      _backendOrigin = 'http://localhost:8000';
-      _serverHasKey  = d.hasApiKey;
-      return;
-    }
-  } catch {}
-  _backendOrigin = '';  // 백엔드 없음
-}
-
-// Claude API 호출: 백엔드 프록시 우선, 없으면 브라우저 직접 호출
-async function callClaude(payload, userApiKey) {
-  await detectBackend();
-  if(_backendOrigin && _serverHasKey) {
-    const base = _backendOrigin === window.location.origin ? '' : _backendOrigin;
-    const resp = await fetch(`${base}/api/claude/proxy`, {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify(payload),
-    });
-    if(!resp.ok) {
-      const e = await resp.json().catch(()=>({}));
-      throw new Error(e?.detail || e?.error?.message || `Proxy error ${resp.status}`);
-    }
-    return resp.json();
-  }
-  // 백엔드 없음 → 브라우저 직접 호출 (API 키 필요)
-  if(!userApiKey) throw new Error('API 키가 없습니다. 설정(⚙️)에서 Anthropic API 키를 입력해주세요.');
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': userApiKey,
-      'anthropic-version': '2023-06-01',
-      [ANTHROPIC_DIRECT]: 'true',
-    },
-    body: JSON.stringify(payload),
-  });
-  if(!resp.ok) {
-    const e = await resp.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `Claude API error ${resp.status}`);
-  }
-  return resp.json();
-}
-
-// 백엔드가 있으면 API 키가 불필요 (서버 키 사용)
-function needsApiKey() {
-  return !(_backendOrigin && _serverHasKey);
-}
+const YF_PROXY  = 'https://corsproxy.io/?url=';
+const CG_BASE   = 'https://api.coingecko.com/api/v3';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+// 비전(이미지 분석): gemini-2.0-flash / 리포트: gemini-2.0-flash
+const GEMINI_VISION_MODEL = 'gemini-2.0-flash';
+const GEMINI_REPORT_MODEL = 'gemini-2.0-flash';
 
 const QUICK_TICKERS = [
   {label:'AAPL',val:'AAPL'},{label:'TSLA',val:'TSLA'},{label:'NVDA',val:'NVDA'},
@@ -411,63 +345,77 @@ async function generateChartImage(ohlcv, ticker) {
   });
 }
 
-// ─── Claude API ───────────────────────────────────────────────────────────────
-async function callClaudeVision(imageB64, mediaType, apiKey) {
-  const data = await callClaude({
-    model:'claude-sonnet-4-6',
-    max_tokens:1024,
-    messages:[{role:'user',content:[
-      {type:'image',source:{type:'base64',media_type: mediaType||'image/png',data:imageB64}},
-      {type:'text',text:'이 주식/암호화폐 차트를 분석해주세요. 캔들스틱 패턴, MA20/MA60 이동평균선 위치, 지지/저항 레벨, 추세 방향, 거래량 패턴을 분석하고 향후 방향성을 예측해주세요. 한국어로 답변해주세요.'},
-    ]}],
-  }, apiKey);
-  return data.content[0].text;
+// ─── Google Gemini API ────────────────────────────────────────────────────────
+async function callGemini(model, parts, apiKey) {
+  if(!apiKey) throw new Error('Google API 키가 없습니다. 우측 상단 ⚙️ 에서 입력해주세요.\n발급: aistudio.google.com');
+  const url = `${GEMINI_BASE}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({
+      contents: [{parts}],
+      generationConfig: {temperature: 0.7, maxOutputTokens: 2048},
+    }),
+  });
+  if(!resp.ok) {
+    const e = await resp.json().catch(()=>({}));
+    const msg = e?.error?.message || `Gemini API error ${resp.status}`;
+    throw new Error(msg);
+  }
+  const data = await resp.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if(!text) throw new Error('Gemini 응답이 비어있습니다.');
+  return text;
 }
 
-async function callClaudeReport(visionText, ticker, price, apiKey) {
+async function callGeminiVision(imageB64, mediaType, apiKey) {
+  return callGemini(GEMINI_VISION_MODEL, [
+    {inline_data: {mime_type: mediaType||'image/png', data: imageB64}},
+    {text: '이 주식/암호화폐 차트를 분석해주세요. 캔들스틱 패턴, MA20/MA60 이동평균선 위치, 지지/저항 레벨, 추세 방향을 분석하고 향후 방향성을 예측해주세요. 한국어로 답변해주세요.'},
+  ], apiKey);
+}
+
+async function callGeminiReport(visionText, ticker, price, apiKey) {
   const prompt = `당신은 전문 주식/암호화폐 분석가입니다.
-아래 차트 분석 내용을 바탕으로 JSON 형식의 투자 리포트를 작성해주세요.
+아래 차트 분석을 바탕으로 투자 리포트를 JSON으로 작성해주세요.
 
 종목: ${ticker}
 현재가: ${price ? '$'+price.toLocaleString() : '불명'}
 차트 분석: ${visionText}
 
-다음 JSON 스키마로 응답해주세요 (JSON만 출력):
+JSON만 출력 (다른 텍스트 없이):
 {
   "ticker": "string",
   "price": number or null,
   "position": "long" | "short" | "hold" | "none",
-  "confidence": number (0-100),
-  "summary": "string (2-3문장 요약)",
-  "technical": "string (기술적 분석)",
+  "confidence": 0~100,
+  "summary": "2-3문장 요약",
+  "technical": "기술적 분석",
   "support": number or null,
   "resistance": number or null,
   "target_price": number or null,
   "stop_loss": number or null,
   "risk_level": "low" | "medium" | "high",
-  "signals": ["string", ...],
-  "recommendation": "string"
+  "signals": ["신호1", "신호2"],
+  "recommendation": "투자 의견"
 }`;
-  const data = await callClaude({
-    model:'claude-opus-4-8',
-    max_tokens:2048,
-    messages:[{role:'user',content:prompt}],
-  }, apiKey);
-  const text = data.content[0].text;
+  const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey);
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    return jsonMatch ? JSON.parse(jsonMatch[0]) : {summary:text, position:'hold', confidence:50};
-  } catch { return {summary:text, position:'hold', confidence:50}; }
+    const m = text.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : {summary: text, position:'hold', confidence:50};
+  } catch { return {summary: text, position:'hold', confidence:50}; }
 }
 
 async function analyzeDirectly(query, apiKey) {
-  const data = await callClaude({
-    model:'claude-sonnet-4-6',
-    max_tokens:2048,
-    messages:[{role:'user',content:`${query}에 대해 투자 분석을 해주세요. 현재 시장 상황, 기술적/기본적 분석, 리스크 요인, 투자 의견을 포함해서 한국어로 답변해주세요.`}],
-  }, apiKey);
-  return {summary: data.content[0].text, position:'hold', confidence:50};
+  const text = await callGemini(GEMINI_REPORT_MODEL, [{
+    text: `${query}에 대해 투자 분석을 해주세요. 현재 시장 상황, 기술적/기본적 분석, 리스크 요인, 투자 의견을 한국어로 상세히 답변해주세요.`,
+  }], apiKey);
+  return {summary: text, position:'hold', confidence:50};
 }
+
+// 하위 호환: 기존 callClaudeVision/Report 호출부가 있다면 Gemini로 포워딩
+const callClaudeVision = callGeminiVision;
+const callClaudeReport = callGeminiReport;
 
 // ─── Full Analysis Pipeline ───────────────────────────────────────────────────
 async function analyzeFull(query, apiKey, onStep) {
@@ -499,17 +447,16 @@ async function analyzeFull(query, apiKey, onStep) {
   let visionText = '';
   if(chartB64) {
     try {
-      visionText = await callClaudeVision(chartB64, apiKey);
+      visionText = await callGeminiVision(chartB64, 'image/png', apiKey);
     } catch(e) { console.warn('vision failed', e); }
   }
   if(!visionText) {
-    // Text-only fallback
     const closes = ohlcv.slice(-10).map(d=>d.close).join(', ');
     visionText = `최근 종가 데이터: ${closes}. 현재가: ${price}`;
   }
 
   step('report');
-  const report = await callClaudeReport(visionText, ticker, price, apiKey);
+  const report = await callGeminiReport(visionText, ticker, price, apiKey);
   report.ticker = report.ticker || ticker;
   report.price  = report.price  || price;
   report.chartB64 = chartB64;
@@ -1108,16 +1055,10 @@ function PerformanceTab({apiKey, serverHasKey}) {
     try {
       const sample = [...logs].reverse().slice(0,20);
       const summary = sample.map(l=>`${l.date?.slice(0,10)} ${l.ticker} ${l.position} ${l.confidence}%`).join('\n');
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST',
-        headers:{'content-type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01',[ANTHROPIC_DIRECT]:'true'},
-        body:JSON.stringify({
-          model:'claude-sonnet-4-6', max_tokens:1024,
-          messages:[{role:'user',content:`다음은 AI 차트 분석 시스템의 최근 분석 기록입니다:\n\n${summary}\n\n이 분석 패턴을 평가해주세요: 편향성, 신뢰도 분포, 포지션 분포의 적절성, 개선 제안 등을 한국어로 분석해주세요.`}],
-        }),
-      });
-      const data = await resp.json();
-      setEvalResult(data.content[0].text);
+      const text = await callGemini(GEMINI_REPORT_MODEL, [{
+        text: `다음은 AI 차트 분석 시스템의 최근 분석 기록입니다:\n\n${summary}\n\n이 분석 패턴을 평가해주세요: 편향성, 신뢰도 분포, 포지션 분포의 적절성, 개선 제안 등을 한국어로 분석해주세요.`,
+      }], apiKey);
+      setEvalResult(text);
     } catch(e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -1588,20 +1529,13 @@ function SettingsDrawer({settings, onSave, onClose, serverHasKey}) {
           <button className="btn-secondary" style={{padding:'4px 12px'}} onClick={onClose}>✕</button>
         </div>
 
-        {serverHasKey ? (
-          <div className="alert-box alert-ok" style={{marginBottom:16}}>
-            🖥 서버에 API 키가 설정되어 있습니다.<br/>
-            <span style={{fontSize:'.8rem',opacity:.8}}>별도 입력 없이 바로 사용 가능합니다.</span>
-          </div>
-        ) : (
-          <div className="settings-group">
-            <label>Anthropic API 키</label>
-            <input type="password" value={s.apiKey} onChange={e=>set('apiKey',e.target.value)} placeholder="sk-ant-..."/>
-            <p style={{fontSize:'.75rem',color:'#64748b',marginTop:4}}>
-              분석에 필요합니다. <a href="https://console.anthropic.com" target="_blank" style={{color:'#60a5fa'}}>발급하기</a>
-            </p>
-          </div>
-        )}
+        <div className="settings-group">
+          <label>Google AI API 키</label>
+          <input type="password" value={s.apiKey} onChange={e=>set('apiKey',e.target.value)} placeholder="AIza..."/>
+          <p style={{fontSize:'.75rem',color:'#64748b',marginTop:4}}>
+            <a href="https://aistudio.google.com/apikey" target="_blank" style={{color:'#60a5fa'}}>aistudio.google.com/apikey</a> 에서 무료 발급
+          </p>
+        </div>
 
         <div className="settings-group">
           <label>모니터링 간격 (초)</label>
@@ -1644,15 +1578,19 @@ function ApiKeyModal({onSave, onSkip}) {
   return (
     <div className="modal-overlay">
       <div className="modal">
-        <h2>🔑 API 키 설정</h2>
-        <p style={{color:'#94a3b8',fontSize:'.9rem',marginBottom:16}}>
-          Chart Sentinel은 Anthropic Claude API를 사용하여 차트를 분석합니다.<br/>
-          API 키를 입력하면 브라우저에서 직접 AI 분석이 실행됩니다.
+        <h2>🔑 Google AI API 키 설정</h2>
+        <p style={{color:'#94a3b8',fontSize:'.9rem',marginBottom:12}}>
+          Chart Sentinel은 <b style={{color:'#60a5fa'}}>Google Gemini AI</b>로 차트를 분석합니다.<br/>
+          서버 없이 브라우저에서 직접 동작합니다.
         </p>
-        <div className="alert-box alert-info" style={{marginBottom:16}}>
-          🔒 API 키는 이 브라우저에만 저장됩니다. 서버로 전송되지 않습니다.
+        <div className="alert-box alert-info" style={{marginBottom:8,fontSize:'.85rem'}}>
+          📌 발급 방법: <a href="https://aistudio.google.com/apikey" target="_blank" style={{color:'#93c5fd',fontWeight:700}}>aistudio.google.com/apikey</a> 접속 → "API 키 만들기" 클릭<br/>
+          <span style={{opacity:.8}}>무료 티어 제공 · 신용카드 불필요</span>
         </div>
-        <input type="password" value={key} onChange={e=>setKey(e.target.value)} placeholder="sk-ant-api03-..."
+        <div className="alert-box alert-ok" style={{marginBottom:12,fontSize:'.82rem'}}>
+          🔒 키는 이 브라우저 localStorage에만 저장됩니다. 외부 서버로 전송되지 않습니다.
+        </div>
+        <input type="password" value={key} onChange={e=>setKey(e.target.value)} placeholder="AIza..."
           style={{marginBottom:12}} onKeyDown={e=>e.key==='Enter'&&key&&onSave(key)}/>
         <div style={{display:'flex',gap:8}}>
           <button className="btn-primary" style={{flex:1}} onClick={()=>onSave(key)} disabled={!key.trim()}>저장하고 시작</button>
@@ -1669,19 +1607,9 @@ function App() {
   const [settings, setSettings] = useState(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
   const [showApiModal, setShowApiModal] = useState(false);
-  const [serverHasKey, setServerHasKey] = useState(false);
-  const [backendChecked, setBackendChecked] = useState(false);
 
   useEffect(()=>{
-    // 앱 시작 시 백엔드 자동 감지
-    detectBackend().then(()=>{
-      setServerHasKey(_serverHasKey);
-      setBackendChecked(true);
-      // 백엔드에 키가 있으면 모달 표시 안 함
-      if(!_serverHasKey && !loadSettings().apiKey) {
-        setShowApiModal(true);
-      }
-    });
+    if(!loadSettings().apiKey) setShowApiModal(true);
   },[]);
 
   const handleApiSave = key => {
@@ -1695,8 +1623,6 @@ function App() {
     setShowSettings(false);
   };
 
-  const apiReady = serverHasKey || !!settings.apiKey;
-
   const TABS = [
     {id:'analysis',  label:'📊 분석'},
     {id:'compare',   label:'⚖ 비교'},
@@ -1706,12 +1632,8 @@ function App() {
     {id:'monitor',   label:'👁 모니터'},
   ];
 
-  const statusBadge = !backendChecked ? (
-    <span className="badge badge-gray" style={{fontSize:'.75rem'}}>확인 중...</span>
-  ) : serverHasKey ? (
-    <span className="badge badge-green" style={{fontSize:'.75rem'}}>🖥 서버 키 사용 중</span>
-  ) : settings.apiKey ? (
-    <span className="badge badge-green" style={{fontSize:'.75rem'}}>🔑 API 연결됨</span>
+  const statusBadge = settings.apiKey ? (
+    <span className="badge badge-green" style={{fontSize:'.75rem'}}>🔑 Google AI 연결됨</span>
   ) : (
     <span className="badge badge-red" style={{fontSize:'.75rem',cursor:'pointer'}} onClick={()=>setShowApiModal(true)}>API 키 없음 (클릭)</span>
   );
@@ -1721,7 +1643,7 @@ function App() {
       <div className="app-header">
         <div>
           <h1>Chart Sentinel</h1>
-          <div className="subtitle">AI 차트 분석 · Standalone</div>
+          <div className="subtitle">AI 차트 분석 · Google Gemini · 서버 불필요</div>
         </div>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           {statusBadge}
@@ -1736,16 +1658,16 @@ function App() {
       </div>
 
       <div className="main-content">
-        {tab==='analysis'    && <AnalysisTab    apiKey={settings.apiKey} settings={settings} serverHasKey={serverHasKey}/>}
-        {tab==='compare'     && <CompareTab     apiKey={settings.apiKey} serverHasKey={serverHasKey}/>}
-        {tab==='performance' && <PerformanceTab apiKey={settings.apiKey} serverHasKey={serverHasKey}/>}
+        {tab==='analysis'    && <AnalysisTab    apiKey={settings.apiKey} settings={settings} serverHasKey={false}/>}
+        {tab==='compare'     && <CompareTab     apiKey={settings.apiKey} serverHasKey={false}/>}
+        {tab==='performance' && <PerformanceTab apiKey={settings.apiKey} serverHasKey={false}/>}
         {tab==='backtest'    && <BacktestTab/>}
         {tab==='portfolio'   && <PortfolioTab/>}
-        {tab==='monitor'     && <MonitorTab     apiKey={settings.apiKey} settings={settings} serverHasKey={serverHasKey}/>}
+        {tab==='monitor'     && <MonitorTab     apiKey={settings.apiKey} settings={settings} serverHasKey={false}/>}
       </div>
 
-      {showSettings && <SettingsDrawer settings={settings} onSave={handleSettingsSave} onClose={()=>setShowSettings(false)} serverHasKey={serverHasKey}/>}
-      {showApiModal  && !serverHasKey && <ApiKeyModal onSave={handleApiSave} onSkip={()=>setShowApiModal(false)}/>}
+      {showSettings && <SettingsDrawer settings={settings} onSave={handleSettingsSave} onClose={()=>setShowSettings(false)} serverHasKey={false}/>}
+      {showApiModal  && <ApiKeyModal onSave={handleApiSave} onSkip={()=>setShowApiModal(false)}/>}
     </ErrorBoundary>
   );
 }
