@@ -17,9 +17,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 from anthropic import AsyncAnthropic
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, BackgroundTasks
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from plotly.subplots import make_subplots
 from pydantic import BaseModel, Field
 
@@ -1404,6 +1405,41 @@ async def portfolio_correlation():
         matrix.append({"ticker": t1, "correlations": dict(zip(tickers, row))})
 
     return {"tickers": tickers, "matrix": matrix}
+
+
+# ── Claude API 프록시 (standalone HTML용) ─────────────────────────────────────
+@app.post("/api/claude/proxy")
+async def claude_proxy(request: Request):
+    """서버의 ANTHROPIC_API_KEY로 Claude API 요청을 프록시합니다."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+
+@app.get("/api/server-status")
+async def server_status():
+    """Standalone HTML이 백엔드 존재 여부를 확인할 때 사용합니다."""
+    return {"ok": True, "hasApiKey": bool(ANTHROPIC_API_KEY)}
+
+
+# standalone HTML 직접 서빙
+@app.get("/standalone")
+async def serve_standalone():
+    p = Path("chart-sentinel-standalone.html")
+    if p.exists():
+        return FileResponse(p, media_type="text/html")
+    raise HTTPException(status_code=404, detail="standalone HTML not found")
 
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────

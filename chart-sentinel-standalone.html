@@ -117,6 +117,75 @@ const YF_PROXY = 'https://corsproxy.io/?url=';
 const CG_BASE  = 'https://api.coingecko.com/api/v3';
 const ANTHROPIC_DIRECT = 'anthropic-dangerous-direct-browser-access';
 
+// 백엔드 자동 감지: 같은 origin에서 서빙되면 /api/server-status를 통해 확인
+let _backendOrigin = null;  // null = 아직 미확인, '' = 없음, 'http://...' = 있음
+let _serverHasKey  = false;
+
+async function detectBackend() {
+  if(_backendOrigin !== null) return;
+  // 1순위: 같은 origin (배포 환경)
+  try {
+    const r = await fetch('/api/server-status', {signal: AbortSignal.timeout(1500)});
+    if(r.ok) {
+      const d = await r.json();
+      _backendOrigin = window.location.origin;
+      _serverHasKey  = d.hasApiKey;
+      return;
+    }
+  } catch {}
+  // 2순위: localhost:8000 (로컬 개발)
+  try {
+    const r = await fetch('http://localhost:8000/api/server-status', {signal: AbortSignal.timeout(1500)});
+    if(r.ok) {
+      const d = await r.json();
+      _backendOrigin = 'http://localhost:8000';
+      _serverHasKey  = d.hasApiKey;
+      return;
+    }
+  } catch {}
+  _backendOrigin = '';  // 백엔드 없음
+}
+
+// Claude API 호출: 백엔드 프록시 우선, 없으면 브라우저 직접 호출
+async function callClaude(payload, userApiKey) {
+  await detectBackend();
+  if(_backendOrigin && _serverHasKey) {
+    const base = _backendOrigin === window.location.origin ? '' : _backendOrigin;
+    const resp = await fetch(`${base}/api/claude/proxy`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if(!resp.ok) {
+      const e = await resp.json().catch(()=>({}));
+      throw new Error(e?.detail || e?.error?.message || `Proxy error ${resp.status}`);
+    }
+    return resp.json();
+  }
+  // 백엔드 없음 → 브라우저 직접 호출 (API 키 필요)
+  if(!userApiKey) throw new Error('API 키가 없습니다. 설정(⚙️)에서 Anthropic API 키를 입력해주세요.');
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': userApiKey,
+      'anthropic-version': '2023-06-01',
+      [ANTHROPIC_DIRECT]: 'true',
+    },
+    body: JSON.stringify(payload),
+  });
+  if(!resp.ok) {
+    const e = await resp.json().catch(()=>({}));
+    throw new Error(e?.error?.message || `Claude API error ${resp.status}`);
+  }
+  return resp.json();
+}
+
+// 백엔드가 있으면 API 키가 불필요 (서버 키 사용)
+function needsApiKey() {
+  return !(_backendOrigin && _serverHasKey);
+}
+
 const QUICK_TICKERS = [
   {label:'AAPL',val:'AAPL'},{label:'TSLA',val:'TSLA'},{label:'NVDA',val:'NVDA'},
   {label:'MSFT',val:'MSFT'},{label:'삼성',val:'005930.KS'},{label:'BTC',val:'BTC'},
@@ -343,29 +412,15 @@ async function generateChartImage(ohlcv, ticker) {
 }
 
 // ─── Claude API ───────────────────────────────────────────────────────────────
-async function callClaudeVision(imageB64, apiKey) {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST',
-    headers:{
-      'content-type':'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version':'2023-06-01',
-      [ANTHROPIC_DIRECT]:'true',
-    },
-    body: JSON.stringify({
-      model:'claude-sonnet-4-6',
-      max_tokens:1024,
-      messages:[{role:'user',content:[
-        {type:'image',source:{type:'base64',media_type:'image/png',data:imageB64}},
-        {type:'text',text:'이 주식/암호화폐 차트를 분석해주세요. 캔들스틱 패턴, MA20/MA60 이동평균선 위치, 지지/저항 레벨, 추세 방향, 거래량 패턴을 분석하고 향후 방향성을 예측해주세요. 한국어로 답변해주세요.'},
-      ]}],
-    }),
-  });
-  if(!resp.ok) {
-    const e = await resp.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `Claude API error ${resp.status}`);
-  }
-  const data = await resp.json();
+async function callClaudeVision(imageB64, mediaType, apiKey) {
+  const data = await callClaude({
+    model:'claude-sonnet-4-6',
+    max_tokens:1024,
+    messages:[{role:'user',content:[
+      {type:'image',source:{type:'base64',media_type: mediaType||'image/png',data:imageB64}},
+      {type:'text',text:'이 주식/암호화폐 차트를 분석해주세요. 캔들스틱 패턴, MA20/MA60 이동평균선 위치, 지지/저항 레벨, 추세 방향, 거래량 패턴을 분석하고 향후 방향성을 예측해주세요. 한국어로 답변해주세요.'},
+    ]}],
+  }, apiKey);
   return data.content[0].text;
 }
 
@@ -393,26 +448,11 @@ async function callClaudeReport(visionText, ticker, price, apiKey) {
   "signals": ["string", ...],
   "recommendation": "string"
 }`;
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST',
-    headers:{
-      'content-type':'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version':'2023-06-01',
-      [ANTHROPIC_DIRECT]:'true',
-    },
-    body: JSON.stringify({
-      model:'claude-opus-4-8',
-      max_tokens:2048,
-      messages:[{role:'user',content:prompt}],
-    }),
-  });
-  if(!resp.ok) {
-    const e = await resp.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `Claude API error ${resp.status}`);
-  }
-  const data = await resp.json();
+  const data = await callClaude({
+    model:'claude-opus-4-8',
+    max_tokens:2048,
+    messages:[{role:'user',content:prompt}],
+  }, apiKey);
   const text = data.content[0].text;
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -421,25 +461,11 @@ async function callClaudeReport(visionText, ticker, price, apiKey) {
 }
 
 async function analyzeDirectly(query, apiKey) {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST',
-    headers:{
-      'content-type':'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version':'2023-06-01',
-      [ANTHROPIC_DIRECT]:'true',
-    },
-    body: JSON.stringify({
-      model:'claude-sonnet-4-6',
-      max_tokens:2048,
-      messages:[{role:'user',content:`${query}에 대해 투자 분석을 해주세요. 현재 시장 상황, 기술적/기본적 분석, 리스크 요인, 투자 의견을 포함해서 한국어로 답변해주세요.`}],
-    }),
-  });
-  if(!resp.ok) {
-    const e = await resp.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `Claude API error ${resp.status}`);
-  }
-  const data = await resp.json();
+  const data = await callClaude({
+    model:'claude-sonnet-4-6',
+    max_tokens:2048,
+    messages:[{role:'user',content:`${query}에 대해 투자 분석을 해주세요. 현재 시장 상황, 기술적/기본적 분석, 리스크 요인, 투자 의견을 포함해서 한국어로 답변해주세요.`}],
+  }, apiKey);
   return {summary: data.content[0].text, position:'hold', confidence:50};
 }
 
@@ -842,16 +868,17 @@ function TradingViewWidget({ticker}) {
 }
 
 // ─── Analysis Tab ─────────────────────────────────────────────────────────────
-function AnalysisTab({apiKey, settings}) {
-  const [query, setQuery]     = useState('');
+function AnalysisTab({apiKey, settings, serverHasKey}) {
+  const [query, setQuery]   = useState('');
   const [loading, setLoading] = useState(false);
-  const [step, setStep]       = useState('');
-  const [report, setReport]   = useState(null);
-  const [error, setError]     = useState('');
-  const [imageMode, setImageMode] = useState(false);
-  const [imgB64, setImgB64]   = useState(null);
+  const [step, setStep]     = useState('');
+  const [report, setReport] = useState(null);
+  const [error, setError]   = useState('');
+  const [imgB64, setImgB64] = useState(null);
   const [imgType, setImgType] = useState(null);
-  const [logs, setLogs]       = useState(()=>ls_get('cs_logs',[]));
+  const [logs, setLogs]     = useState(()=>ls_get('cs_logs',[]));
+
+  const effectiveKey = serverHasKey ? '__server__' : apiKey;
 
   const saveLog = r => {
     const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary?.slice(0,200)};
@@ -860,16 +887,23 @@ function AnalysisTab({apiKey, settings}) {
     setLogs(updated);
   };
 
+  const checkReady = () => {
+    if(!serverHasKey && !apiKey) {
+      setError('API 키가 필요합니다. 우측 상단 ⚙️ 에서 설정해주세요.');
+      return false;
+    }
+    return true;
+  };
+
   const handleAnalyze = async (q) => {
     const target = q || query;
     if(!target.trim()) return;
-    if(!apiKey) { setError('API 키가 필요합니다. 우측 상단 ⚙️ 에서 설정해주세요.'); return; }
+    if(!checkReady()) return;
     setLoading(true); setError(''); setReport(null);
     try {
       const r = await analyzeFull(target, apiKey, (s)=>setStep(s));
       setReport(r);
       saveLog(r);
-      // Auto-alert
       if(settings.autoAlert && r.confidence>=settings.alertThreshold) {
         if(settings.telegramToken) sendTelegramAlert(r, settings).catch(()=>{});
         if(settings.discordWebhook) sendDiscordAlert(r, settings).catch(()=>{});
@@ -880,12 +914,12 @@ function AnalysisTab({apiKey, settings}) {
 
   const handleImageAnalyze = async () => {
     if(!imgB64) return;
-    if(!apiKey) { setError('API 키가 필요합니다.'); return; }
+    if(!checkReady()) return;
     setLoading(true); setError(''); setReport(null);
     try {
-      const vision = await callClaudeVision(imgB64, apiKey);
+      const vision = await callClaudeVision(imgB64, imgType||'image/png', apiKey);
       const r = await callClaudeReport(vision, query||'업로드 이미지', null, apiKey);
-      r.chartB64 = imgType==='image/png'?imgB64:null;
+      r.chartB64 = (imgType==='image/png'||!imgType) ? imgB64 : null;
       r.visionText = vision;
       setReport(r);
       saveLog(r);
@@ -897,30 +931,31 @@ function AnalysisTab({apiKey, settings}) {
     <div>
       <div className="card">
         <div className="card-title">📊 종목 분석</div>
-        <div style={{display:'flex',gap:8,marginBottom:12}}>
-          <button className={`btn-secondary ${!imageMode?'btn-primary':''}`} style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={()=>setImageMode(false)}>티커 분석</button>
-          <button className={`btn-secondary ${imageMode?'btn-primary':''}`}  style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={()=>setImageMode(true)}>이미지 분석</button>
+
+        {/* 티커 분석 영역 */}
+        <div className="quick-tickers">
+          {QUICK_TICKERS.map(t=>(
+            <div key={t.val} className="quick-ticker" onClick={()=>handleAnalyze(t.val)}>{t.label}</div>
+          ))}
         </div>
-        {!imageMode ? (
-          <>
-            <div className="quick-tickers">
-              {QUICK_TICKERS.map(t=>(
-                <div key={t.val} className="quick-ticker" onClick={()=>handleAnalyze(t.val)}>{t.label}</div>
-              ))}
-            </div>
-            <div className="analyze-box">
-              <SearchAutocomplete value={query} onChange={setQuery} onSearch={handleAnalyze}/>
-              <button className="btn-primary" onClick={()=>handleAnalyze()} disabled={loading||!query.trim()}>분석</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="종목명 (선택)" style={{marginBottom:8}}/>
-            <ImageDropzone onImage={(b64,type)=>{setImgB64(b64);setImgType(type);}}/>
-            <button className="btn-primary" style={{marginTop:12,width:'100%'}} onClick={handleImageAnalyze} disabled={loading||!imgB64}>이미지 분석</button>
-          </>
-        )}
-        {error && <div className="alert-box alert-err">{error}</div>}
+        <div className="analyze-box">
+          <SearchAutocomplete value={query} onChange={setQuery} onSearch={handleAnalyze}/>
+          <button className="btn-primary" onClick={()=>handleAnalyze()} disabled={loading||!query.trim()}>분석</button>
+        </div>
+
+        {/* 이미지 업로드 영역 (항상 노출) */}
+        <div style={{borderTop:'1px solid #334155',paddingTop:16,marginTop:4}}>
+          <div style={{fontSize:'.85rem',color:'#94a3b8',marginBottom:8}}>📷 차트 이미지 직접 분석</div>
+          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="종목명 (선택 입력)" style={{marginBottom:8}}/>
+          <ImageDropzone onImage={(b64,type)=>{setImgB64(b64);setImgType(type);}}/>
+          {imgB64 && (
+            <button className="btn-primary" style={{marginTop:10,width:'100%'}} onClick={handleImageAnalyze} disabled={loading}>
+              이미지 분석 실행
+            </button>
+          )}
+        </div>
+
+        {error && <div className="alert-box alert-err" style={{marginTop:12}}>{error}</div>}
       </div>
 
       {loading && <div className="card"><Loader steps={[]} currentStep={step}/></div>}
@@ -962,7 +997,7 @@ function AnalysisTab({apiKey, settings}) {
 }
 
 // ─── Compare Tab ──────────────────────────────────────────────────────────────
-function CompareTab({apiKey}) {
+function CompareTab({apiKey, serverHasKey}) {
   const [tickers, setTickers] = useState(['AAPL','NVDA']);
   const [input, setInput]     = useState('');
   const [loading, setLoading] = useState(false);
@@ -979,7 +1014,7 @@ function CompareTab({apiKey}) {
   const removeTicker = t => setTickers(prev=>prev.filter(x=>x!==t));
 
   const runCompare = async () => {
-    if(!apiKey) { setError('API 키가 필요합니다.'); return; }
+    if(!serverHasKey && !apiKey) { setError('API 키가 필요합니다.'); return; }
     if(tickers.length<2) { setError('최소 2개 종목이 필요합니다.'); return; }
     setLoading(true); setError(''); setResults([]);
     try {
@@ -1052,7 +1087,7 @@ function CompareTab({apiKey}) {
 }
 
 // ─── Performance Tab ──────────────────────────────────────────────────────────
-function PerformanceTab({apiKey}) {
+function PerformanceTab({apiKey, serverHasKey}) {
   const [logs, setLogs]   = useState(()=>ls_get('cs_logs',[]));
   const [evalResult, setEvalResult] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1067,7 +1102,7 @@ function PerformanceTab({apiKey}) {
   },[logs]);
 
   const autoEvaluate = async () => {
-    if(!apiKey) return;
+    if(!serverHasKey && !apiKey) return;
     if(logs.length<5) { alert('분석 기록이 5개 이상 필요합니다.'); return; }
     setLoading(true);
     try {
@@ -1412,7 +1447,7 @@ function PortfolioTab() {
 }
 
 // ─── Monitor Tab ──────────────────────────────────────────────────────────────
-function MonitorTab({apiKey, settings}) {
+function MonitorTab({apiKey, settings, serverHasKey}) {
   const [watchlist, setWatchlist] = useState(()=>loadWatchlist());
   const [prices, setPrices]       = useState({});
   const [input, setInput]         = useState('');
@@ -1541,7 +1576,7 @@ function MonitorTab({apiKey, settings}) {
 }
 
 // ─── Settings Drawer ──────────────────────────────────────────────────────────
-function SettingsDrawer({settings, onSave, onClose}) {
+function SettingsDrawer({settings, onSave, onClose, serverHasKey}) {
   const [s, setS] = useState(settings);
   const set = (k,v) => setS(prev=>({...prev,[k]:v}));
 
@@ -1553,11 +1588,20 @@ function SettingsDrawer({settings, onSave, onClose}) {
           <button className="btn-secondary" style={{padding:'4px 12px'}} onClick={onClose}>✕</button>
         </div>
 
-        <div className="settings-group">
-          <label>Anthropic API 키 *</label>
-          <input type="password" value={s.apiKey} onChange={e=>set('apiKey',e.target.value)} placeholder="sk-ant-..."/>
-          <p style={{fontSize:'.75rem',color:'#64748b',marginTop:4}}>분석에 필요합니다. <a href="https://console.anthropic.com" target="_blank" style={{color:'#60a5fa'}}>발급하기</a></p>
-        </div>
+        {serverHasKey ? (
+          <div className="alert-box alert-ok" style={{marginBottom:16}}>
+            🖥 서버에 API 키가 설정되어 있습니다.<br/>
+            <span style={{fontSize:'.8rem',opacity:.8}}>별도 입력 없이 바로 사용 가능합니다.</span>
+          </div>
+        ) : (
+          <div className="settings-group">
+            <label>Anthropic API 키</label>
+            <input type="password" value={s.apiKey} onChange={e=>set('apiKey',e.target.value)} placeholder="sk-ant-..."/>
+            <p style={{fontSize:'.75rem',color:'#64748b',marginTop:4}}>
+              분석에 필요합니다. <a href="https://console.anthropic.com" target="_blank" style={{color:'#60a5fa'}}>발급하기</a>
+            </p>
+          </div>
+        )}
 
         <div className="settings-group">
           <label>모니터링 간격 (초)</label>
@@ -1625,9 +1669,19 @@ function App() {
   const [settings, setSettings] = useState(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
   const [showApiModal, setShowApiModal] = useState(false);
+  const [serverHasKey, setServerHasKey] = useState(false);
+  const [backendChecked, setBackendChecked] = useState(false);
 
   useEffect(()=>{
-    if(!settings.apiKey) setShowApiModal(true);
+    // 앱 시작 시 백엔드 자동 감지
+    detectBackend().then(()=>{
+      setServerHasKey(_serverHasKey);
+      setBackendChecked(true);
+      // 백엔드에 키가 있으면 모달 표시 안 함
+      if(!_serverHasKey && !loadSettings().apiKey) {
+        setShowApiModal(true);
+      }
+    });
   },[]);
 
   const handleApiSave = key => {
@@ -1641,6 +1695,8 @@ function App() {
     setShowSettings(false);
   };
 
+  const apiReady = serverHasKey || !!settings.apiKey;
+
   const TABS = [
     {id:'analysis',  label:'📊 분석'},
     {id:'compare',   label:'⚖ 비교'},
@@ -1650,19 +1706,25 @@ function App() {
     {id:'monitor',   label:'👁 모니터'},
   ];
 
+  const statusBadge = !backendChecked ? (
+    <span className="badge badge-gray" style={{fontSize:'.75rem'}}>확인 중...</span>
+  ) : serverHasKey ? (
+    <span className="badge badge-green" style={{fontSize:'.75rem'}}>🖥 서버 키 사용 중</span>
+  ) : settings.apiKey ? (
+    <span className="badge badge-green" style={{fontSize:'.75rem'}}>🔑 API 연결됨</span>
+  ) : (
+    <span className="badge badge-red" style={{fontSize:'.75rem',cursor:'pointer'}} onClick={()=>setShowApiModal(true)}>API 키 없음 (클릭)</span>
+  );
+
   return (
     <ErrorBoundary>
       <div className="app-header">
         <div>
           <h1>Chart Sentinel</h1>
-          <div className="subtitle">AI 차트 분석 · 완전 독립 실행형 (Standalone)</div>
+          <div className="subtitle">AI 차트 분석 · Standalone</div>
         </div>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
-          {settings.apiKey ? (
-            <span className="badge badge-green" style={{fontSize:'.75rem'}}>API 연결됨</span>
-          ) : (
-            <span className="badge badge-red" style={{fontSize:'.75rem',cursor:'pointer'}} onClick={()=>setShowApiModal(true)}>API 키 없음</span>
-          )}
+          {statusBadge}
           <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.85rem'}} onClick={()=>setShowSettings(true)}>⚙️</button>
         </div>
       </div>
@@ -1674,16 +1736,16 @@ function App() {
       </div>
 
       <div className="main-content">
-        {tab==='analysis'    && <AnalysisTab    apiKey={settings.apiKey} settings={settings}/>}
-        {tab==='compare'     && <CompareTab     apiKey={settings.apiKey}/>}
-        {tab==='performance' && <PerformanceTab apiKey={settings.apiKey}/>}
+        {tab==='analysis'    && <AnalysisTab    apiKey={settings.apiKey} settings={settings} serverHasKey={serverHasKey}/>}
+        {tab==='compare'     && <CompareTab     apiKey={settings.apiKey} serverHasKey={serverHasKey}/>}
+        {tab==='performance' && <PerformanceTab apiKey={settings.apiKey} serverHasKey={serverHasKey}/>}
         {tab==='backtest'    && <BacktestTab/>}
         {tab==='portfolio'   && <PortfolioTab/>}
-        {tab==='monitor'     && <MonitorTab     apiKey={settings.apiKey} settings={settings}/>}
+        {tab==='monitor'     && <MonitorTab     apiKey={settings.apiKey} settings={settings} serverHasKey={serverHasKey}/>}
       </div>
 
-      {showSettings && <SettingsDrawer settings={settings} onSave={handleSettingsSave} onClose={()=>setShowSettings(false)}/>}
-      {showApiModal  && <ApiKeyModal onSave={handleApiSave} onSkip={()=>setShowApiModal(false)}/>}
+      {showSettings && <SettingsDrawer settings={settings} onSave={handleSettingsSave} onClose={()=>setShowSettings(false)} serverHasKey={serverHasKey}/>}
+      {showApiModal  && !serverHasKey && <ApiKeyModal onSave={handleApiSave} onSkip={()=>setShowApiModal(false)}/>}
     </ErrorBoundary>
   );
 }
