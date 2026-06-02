@@ -107,14 +107,23 @@ tr:hover td{background:#0f172a}
 .tab-inner-btn.active{background:#334155;color:#e2e8f0}
 </style>
 <!-- ══════════════════════════════════════════════════
-     ★ 배포자 설정 — 여기만 수정하세요
-     aistudio.google.com/apikey 에서 발급한 키를 붙여넣으세요.
-     키가 입력되면 사용자에게 입력창이 표시되지 않습니다.
-     ══════════════════════════════════════════════════ -->
+  ★ 배포자 설정 — 여기만 수정하세요 (메모장으로 편집 가능)
+
+  [방법 A] Cloudflare Worker 프록시 사용 (권장 - 다수 배포용)
+    1. cloudflare-worker.js 코드를 Cloudflare Workers에 배포
+    2. Worker URL을 PROXY_URL에 붙여넣기
+    3. GOOGLE_API_KEY 는 Worker 환경변수에 설정 (HTML에 노출 안 됨)
+    → API 키가 HTML에 없어서 안전, 요청 제한으로 남용 방지
+
+  [방법 B] 개인/소규모 사용
+    PROXY_URL 비워두고 GOOGLE_API_KEY 에 키 직접 입력
+    (소수 지인 공유 수준에서만 사용 권장)
+══════════════════════════════════════════════════ -->
 <script>
 window.DEPLOY_CONFIG = {
-  GOOGLE_API_KEY: '',          // 예: 'AIzaSyXXXXXXXXXXXXXXXXXX'
-  APP_TITLE:      'Chart Sentinel',   // 헤더에 표시할 앱 이름 (선택)
+  PROXY_URL:      '',   // Worker URL: 'https://chart-sentinel.yourname.workers.dev'
+  GOOGLE_API_KEY: '',   // 방법 B 전용: 'AIzaSyXXXXXXXXX' (방법 A 사용 시 비워두세요)
+  APP_TITLE:      'Chart Sentinel',
 };
 </script>
 </head>
@@ -123,9 +132,10 @@ window.DEPLOY_CONFIG = {
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback,useMemo} = React;
 
-// ─── 배포 설정 읽기 (window.DEPLOY_CONFIG 우선, 없으면 localStorage)
+// ─── 배포 설정 읽기
+const PROXY_URL  = window.DEPLOY_CONFIG?.PROXY_URL?.trim()      || '';
 const DEPLOY_KEY = window.DEPLOY_CONFIG?.GOOGLE_API_KEY?.trim() || '';
-const APP_TITLE  = window.DEPLOY_CONFIG?.APP_TITLE || 'Chart Sentinel';
+const APP_TITLE  = window.DEPLOY_CONFIG?.APP_TITLE              || 'Chart Sentinel';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const YF_PROXY  = 'https://corsproxy.io/?url=';
@@ -360,27 +370,37 @@ async function generateChartImage(ohlcv, ticker) {
 }
 
 // ─── Google Gemini API ────────────────────────────────────────────────────────
-// DEPLOY_KEY(배포자 설정) → userApiKey(localStorage) 순으로 사용
-function resolveApiKey(userApiKey) {
-  return DEPLOY_KEY || userApiKey || '';
-}
+// 우선순위: Cloudflare Worker 프록시 > DEPLOY_KEY(직접) > 사용자 키(직접)
+async function callGemini(model, parts, userApiKey) {
+  const body = {
+    model,  // Worker에서 추출, Gemini URL에 사용
+    contents: [{parts}],
+    generationConfig: {temperature: 0.7, maxOutputTokens: 2048},
+  };
 
-async function callGemini(model, parts, apiKey) {
-  const key = resolveApiKey(apiKey);
-  if(!key) throw new Error('Google API 키가 없습니다. 우측 상단 ⚙️ 에서 입력해주세요.\n발급: aistudio.google.com/apikey');
-  apiKey = key;
-  const url = `${GEMINI_BASE}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {'content-type': 'application/json'},
-    body: JSON.stringify({
-      contents: [{parts}],
-      generationConfig: {temperature: 0.7, maxOutputTokens: 2048},
-    }),
-  });
+  let resp;
+  if(PROXY_URL) {
+    // [방법 A] Cloudflare Worker 프록시 — API 키가 HTML에 없음
+    resp = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+  } else {
+    // [방법 B] 브라우저 직접 호출 — DEPLOY_KEY 또는 사용자 키 사용
+    const key = DEPLOY_KEY || userApiKey;
+    if(!key) throw new Error('Google API 키가 없습니다. 우측 상단 ⚙️ 에서 입력해주세요.\n발급: aistudio.google.com/apikey');
+    const url = `${GEMINI_BASE}/${model}:generateContent?key=${encodeURIComponent(key)}`;
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({contents: body.contents, generationConfig: body.generationConfig}),
+    });
+  }
+
   if(!resp.ok) {
     const e = await resp.json().catch(()=>({}));
-    const msg = e?.error?.message || `Gemini API error ${resp.status}`;
+    const msg = e?.error?.message || e?.error || `Gemini error ${resp.status}`;
     throw new Error(msg);
   }
   const data = await resp.json();
@@ -1630,9 +1650,8 @@ function App() {
   const [showApiModal, setShowApiModal] = useState(false);
 
   useEffect(()=>{
-    // DEPLOY_KEY가 있으면 → 모달 표시 안 함 (배포자가 미리 설정)
-    // DEPLOY_KEY가 없고 localStorage에도 없으면 → 사용자가 직접 입력
-    if(!DEPLOY_KEY && !loadSettings().apiKey) setShowApiModal(true);
+    // 프록시 URL 또는 DEPLOY_KEY 있으면 → 모달 표시 안 함
+    if(!PROXY_URL && !DEPLOY_KEY && !loadSettings().apiKey) setShowApiModal(true);
   },[]);
 
   const handleApiSave = key => {
@@ -1658,7 +1677,9 @@ function App() {
     {id:'monitor',   label:'👁 모니터'},
   ];
 
-  const statusBadge = DEPLOY_KEY ? (
+  const statusBadge = PROXY_URL ? (
+    <span className="badge badge-green" style={{fontSize:'.75rem'}}>✅ 서비스 준비됨</span>
+  ) : DEPLOY_KEY ? (
     <span className="badge badge-green" style={{fontSize:'.75rem'}}>✅ AI 준비됨</span>
   ) : activeKey ? (
     <span className="badge badge-green" style={{fontSize:'.75rem'}}>🔑 Google AI 연결됨</span>
@@ -1675,8 +1696,8 @@ function App() {
         </div>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           {statusBadge}
-          {/* DEPLOY_KEY 배포 시엔 설정 버튼 숨김 (키 노출 방지) */}
-          {!DEPLOY_KEY && (
+          {/* 프록시/하드코딩 배포 시엔 설정 버튼 숨김 */}
+          {!PROXY_URL && !DEPLOY_KEY && (
             <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.85rem'}} onClick={()=>setShowSettings(true)}>⚙️</button>
           )}
         </div>
