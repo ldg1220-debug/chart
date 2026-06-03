@@ -247,23 +247,49 @@ function resolveTicker(query) {
   return {ticker: up, type:'stock'};
 }
 
-// ─── Yahoo Finance OHLCV ──────────────────────────────────────────────────────
-async function fetchYahooOHLCV(ticker, range='6mo', interval='1d') {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${interval}&includePrePost=false`;
-  let resp;
+// ─── 주식 OHLCV — 다중 소스 폴백 ─────────────────────────────────────────────
+// 1순위: Yahoo Finance v8 (corsproxy.io 프록시)
+// 2순위: Yahoo Finance v8 (allorigins 프록시)
+// 3순위: Stooq CSV (CORS 없음, 무료)
+
+const PROXY_LIST = [
+  url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+];
+
+async function fetchViaProxies(yfUrl) {
+  // 직접 시도
   try {
-    resp = await fetch(url, {headers:{'Accept':'application/json'}});
-    if(!resp.ok) throw new Error('direct fail');
-  } catch {
-    resp = await fetch(YF_PROXY + encodeURIComponent(url));
+    const r = await fetch(yfUrl, {signal: AbortSignal.timeout(5000)});
+    if(r.ok) { const d=await r.json(); if(d?.chart?.result) return d; }
+  } catch {}
+
+  // 프록시 순차 시도
+  for(const makeUrl of PROXY_LIST) {
+    try {
+      const r = await fetch(makeUrl(yfUrl), {signal: AbortSignal.timeout(8000)});
+      if(!r.ok) continue;
+      const raw = await r.json();
+      // allorigins는 {contents: "...json string..."} 형태
+      const d = raw?.contents ? JSON.parse(raw.contents) : raw;
+      if(d?.chart?.result) return d;
+    } catch {}
   }
-  const data = await resp.json();
-  return parseYahooResponse(data);
+  return null;
+}
+
+async function fetchYahooOHLCV(ticker, range='6mo', interval='1d') {
+  const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${interval}&includePrePost=false&events=div%2Csplit`;
+  const data = await fetchViaProxies(yfUrl);
+  if(data) return parseYahooResponse(data);
+
+  // 최후 폴백: Stooq (한국 제외 주요 미국 주식)
+  return fetchStooq(ticker, range);
 }
 
 function parseYahooResponse(data) {
   const r = data?.chart?.result?.[0];
-  if(!r) throw new Error('Yahoo Finance: no data');
+  if(!r) throw new Error('Yahoo Finance: 데이터 없음');
   const ts = r.timestamp;
   const q  = r.indicators.quote[0];
   const adj= r.indicators.adjclose?.[0]?.adjclose;
@@ -273,9 +299,33 @@ function parseYahooResponse(data) {
     high:  q.high[i],
     low:   q.low[i],
     close: q.close[i],
-    volume:q.volume[i],
+    volume:q.volume[i]||0,
     adjclose: adj?adj[i]:q.close[i],
-  })).filter(d=>d.close!=null);
+  })).filter(d=>d.close!=null && !isNaN(d.close));
+}
+
+// Stooq: 미국/글로벌 주식 CSV (CORS 허용)
+async function fetchStooq(ticker, range='6mo') {
+  const daysMap = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
+  const days = daysMap[range]||180;
+  const to   = new Date();
+  const from = new Date(to - days*864e5);
+  const fmt  = d => d.toISOString().slice(0,10).replace(/-/g,'');
+  // Stooq 티커: 미국 주식은 그대로, 한국은 .KS 제거 후 .KO
+  const stooqTicker = ticker.replace('.KS','.KO').toLowerCase();
+  const url = `https://stooq.com/q/d/l/?s=${stooqTicker}&d1=${fmt(from)}&d2=${fmt(to)}&i=d`;
+  const r = await fetch(url, {signal: AbortSignal.timeout(8000)});
+  if(!r.ok) throw new Error(`Stooq 오류: ${r.status}`);
+  const csv = await r.text();
+  const lines = csv.trim().split('\n');
+  if(lines.length < 2 || lines[0].toLowerCase().includes('no data')) throw new Error('Stooq: 데이터 없음');
+  return lines.slice(1).map(l=>{
+    const [date,open,high,low,close,volume] = l.split(',');
+    return {
+      date, open:+open, high:+high, low:+low, close:+close,
+      volume:+(volume||0), adjclose:+close,
+    };
+  }).filter(d=>d.close && !isNaN(d.close));
 }
 
 async function fetchYahooPrice(ticker) {
@@ -563,29 +613,37 @@ async function analyzeFull(query, apiKey, onStep) {
   let ohlcv, price;
   try {
     ohlcv = await fetchOHLCV(query, '6mo');
+    if(!ohlcv || ohlcv.length < 10) throw new Error('데이터 부족');
     price = ohlcv[ohlcv.length-1]?.close;
   } catch(e) {
-    // Fallback to text-only analysis
+    // 데이터 수집 실패 → 텍스트 분석으로 폴백
     onStep&&onStep('fallback', -1);
-    return analyzeDirectly(query, apiKey);
+    const r = await analyzeDirectly(query, apiKey);
+    r._dataError = `가격 데이터 수집 실패 (${e.message}). 텍스트 기반 분석으로 대체합니다.`;
+    return r;
   }
 
   step('chart');
   let chartB64 = null;
   try {
     chartB64 = await generateChartImage(ohlcv, ticker);
-  } catch(e) { console.warn('chart gen failed', e); }
+  } catch(e) { console.error('차트 생성 실패:', e); }
 
   step('vision');
   let visionText = '';
   if(chartB64) {
     try {
       visionText = await callGeminiVision(chartB64, 'image/png', apiKey);
-    } catch(e) { console.warn('vision failed', e); }
+    } catch(e) { console.error('Vision 분석 실패:', e); }
   }
   if(!visionText) {
-    const closes = ohlcv.slice(-10).map(d=>d.close).join(', ');
-    visionText = `최근 종가 데이터: ${closes}. 현재가: ${price}`;
+    // 차트 없이 수치 데이터로 분석
+    const recent = ohlcv.slice(-30);
+    const closes = recent.map(d=>d.close);
+    const ma20v  = movingAverage(closes,Math.min(20,closes.length));
+    const rsi14v = rsi(closes,Math.min(14,closes.length-1));
+    const lastRsi= rsi14v.reduce((a,v)=>v!=null?v:a, null);
+    visionText = `종목: ${ticker}, 현재가: ${price}, 최근30일 종가: ${closes.slice(-10).map(v=>v?.toFixed(2)).join(', ')}, MA20: ${ma20v[ma20v.length-1]?.toFixed(2)||'N/A'}, RSI(14): ${lastRsi?.toFixed(1)||'N/A'}`;
   }
 
   step('report');
@@ -815,6 +873,11 @@ function ReportCard({report, onSave}) {
           {onSave && <button className="btn-secondary" style={{padding:'4px 12px',fontSize:'.8rem'}} onClick={()=>onSave(report)}>저장</button>}
         </div>
       </div>
+
+      {/* 데이터 수집 실패 안내 */}
+      {report._dataError && (
+        <div className="alert-box alert-warn" style={{marginBottom:12,fontSize:'.82rem'}}>{report._dataError}</div>
+      )}
 
       {/* 차트 이미지 */}
       {report.chartB64 && (
