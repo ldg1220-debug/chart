@@ -93,7 +93,7 @@ export default {
     }
 
     // model 추출 (body에서 받거나 기본값 사용)
-    const model = body.model || 'gemini-2.0-flash';
+    const model = body.model || 'gemini-2.5-flash';
     delete body.model; // Gemini API로 전달 시 model은 URL에만
 
     // Gemini API 호출
