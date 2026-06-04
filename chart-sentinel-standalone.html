@@ -42,6 +42,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:
 .loader{display:flex;flex-direction:column;align-items:center;gap:12px;padding:40px}
 .spinner{width:40px;height:40px;border:3px solid #334155;border-top:3px solid #3b82f6;border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 @media(max-width:768px){.grid-2,.grid-3{grid-template-columns:1fr}}
@@ -875,32 +876,38 @@ async function fetchCurrentPrice(query, mode='auto') {
   return fetchYahooPrice(ticker);
 }
 
+const _ohlcvCache = {};
 async function fetchOHLCV(query, range='6mo', mode='auto') {
+  const cacheKey = `${query.trim().toLowerCase()}|${range}|${mode}`;
+  const TTL = 5 * 60 * 1000; // 5분
+  const cached = _ohlcvCache[cacheKey];
+  if (cached && Date.now() - cached.ts < TTL) return cached.data;
+
   let {ticker, type} = resolveTicker(query, mode);
+  let result;
   if (type === 'crypto') {
     const limitMap = {'1mo':90,'3mo':180,'6mo':300,'1y':365,'2y':500,'5y':700};
     const limit = limitMap[range] || 300;
     const daysMap  = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
     const days = daysMap[range] || 180;
     const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
-    const errors = [];
-    // 1) Binance Spot
-    try { const s = await resolveBinanceSymbol(query); return await fetchBinanceKlines(s,'1d',limit); }
-    catch(e) { errors.push('Spot: '+e.message); }
-    // 2) Binance Futures
-    try { return await fetchBinanceFuturesKlines(sym,'1d',limit); } catch(e) { errors.push('Futures: '+e.message); }
-    // 3) CoinGecko
-    try {
-      if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
-      return await fetchCryptoOHLCV(ticker, days);
-    } catch(e) { errors.push('CoinGecko: '+e.message); }
-    // 4) OKX
-    try { return await fetchOKXKlines(sym,'1d',limit); } catch(e) { errors.push('OKX: '+e.message); }
-    // 5) Bybit
-    try { return await fetchBybitKlines(sym,'1d',limit); } catch(e) { errors.push('Bybit: '+e.message); }
-    throw new Error(`코인 데이터를 가져올 수 없습니다. 심볼/이름을 확인해주세요.\n(${errors.slice(0,2).join(' | ')})`);
+    const spotP = resolveBinanceSymbol(query).then(s=>fetchBinanceKlines(s,'1d',limit));
+    const futP  = fetchBinanceFuturesKlines(sym,'1d',limit);
+    try { result = await Promise.race([spotP.catch(()=>futP), futP.catch(()=>spotP)]); }
+    catch {
+      try {
+        if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
+        result = await fetchCryptoOHLCV(ticker, days);
+      } catch {
+        try { result = await fetchOKXKlines(sym,'1d',limit); }
+        catch { result = await fetchBybitKlines(sym,'1d',limit); }
+      }
+    }
+  } else {
+    result = await fetchYahooOHLCV(ticker, range);
   }
-  return fetchYahooOHLCV(ticker, range);
+  if (result?.length) _ohlcvCache[cacheKey] = {data: result, ts: Date.now()};
+  return result;
 }
 
 // ─── 기술 지표 계산 ──────────────────────────────────────────────────────────
@@ -1419,10 +1426,16 @@ async function callGemini(model, parts, userApiKey) {
   return text;
 }
 
-async function callGeminiVision(imageB64, mediaType, apiKey) {
+async function callGeminiVision(imageB64, mediaType, apiKey, timeframeLabel='일봉') {
+  const tfContext = timeframeLabel.includes('분') ? `단기(${timeframeLabel}) 차트로, 단기 변동성·매수매도 압력·단기 추세 전환에 집중하세요.`
+    : timeframeLabel.includes('시간') ? `중단기(${timeframeLabel}) 차트로, 중단기 추세 지속·주요 지지저항 돌파 여부에 집중하세요.`
+    : timeframeLabel==='주봉'||timeframeLabel==='월봉' ? `장기(${timeframeLabel}) 차트로, 장기 추세·거시적 관점·대형 패턴에 집중하세요.`
+    : `중기(${timeframeLabel}) 차트로, 중기 추세·모멘텀·주요 지지저항에 집중하세요.`;
   return callGemini(GEMINI_VISION_MODEL, [
     {inline_data: {mime_type: mediaType||'image/png', data: imageB64}},
-    {text: `당신은 전문 기술적 분석가입니다. 이 차트를 항목별로 심층 분석하세요.
+    {text: `당신은 전문 기술적 분석가입니다. 현재 분석 중인 차트는 [${timeframeLabel}] 입니다. ${tfContext}
+
+이 차트를 항목별로 심층 분석하세요.
 각 항목에서 수치나 상태만 나열하지 말고, 반드시 "그것이 지금 매매에 어떤 의미인지" 해석하여 서술하세요.
 
 1. **추세 분석**: 단기(1주)/중기(1개월)/장기(3개월) 추세 방향과 강도. 현재 추세가 지속될 가능성과 반전 조건.
@@ -1604,7 +1617,7 @@ async function analyzeFull(query, apiKey, onStep, mode='auto') {
   let visionText = '';
   if(chartB64) {
     try {
-      visionText = await callGeminiVision(chartB64, 'image/png', apiKey);
+      visionText = await callGeminiVision(chartB64, 'image/png', apiKey, '일봉');
     } catch(e) { console.error('Vision 분석 실패:', e); }
   }
   if(!visionText) {
@@ -2030,6 +2043,7 @@ function ReportHero({report, onSave}) {
 
 function AnalysisSection({report}) {
   if(!report) return null;
+  const [open, setOpen] = React.useState(true);
   const curPrice = report.price ? Number(report.price) : null;
   const fmtPrice = v => v ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:4})}` : null;
   const PriceTag = ({val, label, color}) => {
@@ -2047,7 +2061,11 @@ function AnalysisSection({report}) {
   };
   return (
     <div className="card">
-      <div className="card-title">📐 분석</div>
+      <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
+        <span>📐 분석</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+      </div>
+      {!open && null}
+      {open && <>
       {/* Key price levels */}
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
         <PriceTag val={report.support}      label="지지선"  color="#34d399"/>
@@ -2061,15 +2079,20 @@ function AnalysisSection({report}) {
       <FibSection computed={report.computed}/>
       {/* Trade plan */}
       <TradePlanSection computed={report.computed} report={report}/>
+      </>}
     </div>
   );
 }
 
 function ConclusionSection({report}) {
   if(!report) return null;
+  const [open, setOpen] = React.useState(true);
   return (
     <div className="card">
-      <div className="card-title">💡 결론 및 AI 의견</div>
+      <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
+        <span>💡 결론 및 AI 의견</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+      </div>
+      {open && <>
       {/* Summary */}
       {report.summary && (
         <div style={{background:'#0f172a',border:'1px solid #1e3a5f',borderLeft:'3px solid #3b82f6',borderRadius:8,padding:'14px 16px',marginBottom:14,lineHeight:1.8,fontSize:'.92rem',color:'#cbd5e1'}}>
@@ -2094,6 +2117,7 @@ function ConclusionSection({report}) {
           <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginTop:8,fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7,whiteSpace:'pre-wrap'}}>{report.visionText}</div>
         </details>
       )}
+      </>}
     </div>
   );
 }
@@ -2398,7 +2422,26 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         {error && <div className="alert-box alert-err" style={{marginTop:12}}>{error}</div>}
       </div>
 
-      {loading && <div className="card"><Loader steps={[]} currentStep={step}/></div>}
+      {loading && (
+        <div>
+          <div className="card" style={{padding:'18px 20px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12}}>
+              <div>
+                <div style={{width:60,height:12,background:'#1e293b',borderRadius:4,marginBottom:8,animation:'pulse 1.5s ease-in-out infinite'}}/>
+                <div style={{width:140,height:28,background:'#1e293b',borderRadius:4,marginBottom:6,animation:'pulse 1.5s ease-in-out infinite'}}/>
+                <div style={{width:180,height:22,background:'#1e293b',borderRadius:4,animation:'pulse 1.5s ease-in-out infinite'}}/>
+              </div>
+              <div style={{width:100,height:40,background:'#1e293b',borderRadius:8,animation:'pulse 1.5s ease-in-out infinite'}}/>
+            </div>
+          </div>
+          <div className="card" style={{height:320,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12}}>
+            <div className="spinner"/>
+            <div style={{color:'#475569',fontSize:'.85rem'}}>
+              {step==='ticker'?'🔍 종목 확인 중...':step==='data'?'📊 차트 데이터 수집 중...':step==='chart'?'🖼️ 차트 렌더링 중...':step==='vision'?'🤖 AI 차트 분석 중...':step==='report'?'📝 리포트 생성 중...':'분석 중...'}
+            </div>
+          </div>
+        </div>
+      )}
 
       {report && !loading && (
         <>
