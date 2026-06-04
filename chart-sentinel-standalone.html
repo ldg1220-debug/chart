@@ -217,6 +217,61 @@ const CRYPTO_MAP = {
   'worldcoin-wld':'worldcoin-wld','wld':'worldcoin-wld',
   'jupiter-exchange-solana':'jupiter-exchange-solana','jup':'jupiter-exchange-solana',
   'pyth-network':'pyth-network','pyth':'pyth-network',
+  'hyperliquid':'hyperliquid','hype':'hyperliquid',
+  'notcoin':'notcoin','not':'notcoin',
+  'floki-inu':'floki-inu','floki':'floki-inu',
+  'fetch-ai':'fetch-ai','fet':'fetch-ai','fetchai':'fetch-ai',
+  'gala':'gala',
+  'the-sandbox':'the-sandbox','sand':'the-sandbox',
+  'decentraland':'decentraland','mana':'decentraland',
+  'axie-infinity':'axie-infinity','axs':'axie-infinity',
+  'immutable-x':'immutable-x','imx':'immutable-x',
+  'blur':'blur',
+  'starknet':'starknet','strk':'starknet',
+  'celestia':'celestia','tia':'celestia',
+  'ethena':'ethena','ena':'ethena',
+  'kaspa':'kaspa','kas':'kaspa',
+  'hedera':'hedera','hbar':'hedera',
+  'vechain':'vechain','vet':'vechain',
+  'algorand':'algorand','algo':'algorand',
+  'fantom':'fantom','ftm':'fantom',
+  'flow':'flow',
+  'theta-token':'theta-token','theta':'theta-token',
+  'pendle':'pendle',
+  'ondo-finance':'ondo-finance','ondo':'ondo-finance',
+  'usual':'usual',
+  'pudgy-penguins':'pudgy-penguins','pengu':'pudgy-penguins',
+  'movement':'movement','move':'movement',
+  'virtuals-protocol':'virtuals-protocol','virtual':'virtuals-protocol',
+  'berachain-bera':'berachain-bera','bera':'berachain-bera',
+  'official-trump':'official-trump','trump':'official-trump',
+  'kaito':'kaito',
+  'ip-protocol':'ip-protocol','ip':'ip-protocol',
+  'sonic-3':'sonic-3','sonic':'sonic-3',
+  'zksync':'zksync','zk':'zksync',
+  'layerzero':'layerzero','zro':'layerzero',
+  'wormhole':'wormhole','w':'wormhole',
+  'manta-network':'manta-network','manta':'manta-network',
+  'dymension':'dymension','dym':'dymension',
+  'alt-layer':'alt-layer','alt':'alt-layer',
+  'omni-network':'omni-network','omni':'omni-network',
+  'zeta-chain':'zeta-chain','zeta':'zeta-chain',
+  'saga-2':'saga-2','saga':'saga-2',
+  'pepe':'pepe',
+  'meme':'meme','memecoin':'meme',
+  'act-i-the-ai-prophecy':'act-i-the-ai-prophecy','act':'act-i-the-ai-prophecy',
+  'goat':'goat',
+  'pnut':'pnut',
+  'aixbt-by-virtuals':'aixbt-by-virtuals','aixbt':'aixbt-by-virtuals',
+  'fartcoin':'fartcoin',
+  'ai16z':'ai16z',
+  'solv-protocol':'solv-protocol','solv':'solv-protocol',
+  'edge-matrix-computing':'edge-matrix-computing','edgex':'edge-matrix-computing','edge':'edge-matrix-computing',
+  'hamster-kombat':'hamster-kombat','hmstr':'hamster-kombat',
+  'dogs-2':'dogs-2','dogs':'dogs-2',
+  'major':'major',
+  'cati':'cati',
+  'bome':'bome',
 };
 
 // ─── Binance API ─────────────────────────────────────────────────────────────
@@ -331,7 +386,7 @@ const BINANCE_SYMBOL_MAP = {
   'flow':'FLOWUSDT',
   'fantom':'FTMUSDT','ftm':'FTMUSDT',
   'kucoin-shares':'KSMUSDT','ksm':'KSMUSDT',
-  'edgex':'EDGEXUSDT','edge-matrix-computing':'EDGEXUSDT',
+  'edgex':'EDGEXUSDT','edge-matrix-computing':'EDGEXUSDT','edge':'EDGEUSDT',
 };
 
 // Timeframe config for each interval
@@ -510,8 +565,10 @@ function resolveTicker(query, mode='auto') {
   // auto
   if (KR_TICKER_MAP[q]) return {ticker: KR_TICKER_MAP[q], type:'stock'};
   if (CRYPTO_MAP[q]) return {ticker: CRYPTO_MAP[q], type:'crypto'};
+  // BINANCE_SYMBOL_MAP also signals crypto (covers new coins not yet in CRYPTO_MAP)
+  if (BINANCE_SYMBOL_MAP[q]) return {ticker: q, type:'crypto'};
   const up = query.trim().toUpperCase();
-  const cryptoSuffixes = ['BTC','ETH','SOL','XRP','BNB','ADA','DOGE','AVAX','MATIC','LINK','DOT','ATOM','LTC','TRX','SHIB','NEAR','APT','SUI','ARB','OP','TON','ICP','UNI','INJ','SEI'];
+  const cryptoSuffixes = ['BTC','ETH','SOL','XRP','BNB','ADA','DOGE','AVAX','MATIC','LINK','DOT','ATOM','LTC','TRX','SHIB','NEAR','APT','SUI','ARB','OP','TON','ICP','UNI','INJ','SEI','HYPE','PENGU','MOVE','TRUMP','BERA','VIRTUAL','KAITO','ZK','ENA','TIA','STX','BLUR','IMX','MANA','SAND','FET','FLOKI','NOT','HMSTR','BONK','PEPE','WIF','RENDER','ONDO','USUAL'];
   if (cryptoSuffixes.includes(up)) return {ticker: CRYPTO_MAP[up.toLowerCase()]||up.toLowerCase(), type:'crypto'};
   return {ticker: up, type:'stock'};
 }
@@ -572,15 +629,25 @@ async function fetchOKXKlines(symbol, interval='1d', limit=300) {
   const barMap = {'1d':'1D','1w':'1W','1M':'1M','4h':'4H','30m':'30m','5m':'5m','1h':'1H','2h':'2H'};
   const bar = barMap[interval] || '1D';
   const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
-  const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
-  if (!resp.ok) throw new Error(`OKX ${instId}: ${resp.status}`);
-  const data = await resp.json();
-  if (!data.data?.length) throw new Error(`OKX ${instId}: 데이터 없음`);
-  return data.data.slice().reverse().map(k => ({
-    date: new Date(+k[0]).toISOString().slice(0,16).replace('T',' '),
-    t: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4],
-    volume: +k[5], adjclose: +k[4],
-  }));
+  const tryFetch = async (u) => {
+    const r = await fetch(u, {signal: AbortSignal.timeout(8000)});
+    if (!r.ok) throw new Error(`${r.status}`);
+    const d = await r.json();
+    let data = d?.contents ? JSON.parse(d.contents) : d;
+    if (!data.data?.length) throw new Error('데이터 없음');
+    return data.data.slice().reverse().map(k => ({
+      date: new Date(+k[0]).toISOString().slice(0,16).replace('T',' '),
+      t: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4],
+      volume: +k[5], adjclose: +k[4],
+    }));
+  };
+  // direct → proxy fallback
+  try { return await tryFetch(url); } catch(e1) {
+    for (const mkp of PROXY_LIST) {
+      try { return await tryFetch(mkp(url)); } catch {}
+    }
+    throw new Error(`OKX ${instId}: 데이터 없음`);
+  }
 }
 
 async function fetchBybitKlines(symbol, interval='1d', limit=300) {
@@ -588,15 +655,24 @@ async function fetchBybitKlines(symbol, interval='1d', limit=300) {
   const intMap = {'1d':'D','1w':'W','1M':'M','4h':'240','30m':'30','5m':'5','1h':'60'};
   const i = intMap[interval] || 'D';
   const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${sym}&interval=${i}&limit=${limit}`;
-  const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
-  if (!resp.ok) throw new Error(`Bybit ${sym}: ${resp.status}`);
-  const data = await resp.json();
-  if (!data.result?.list?.length) throw new Error(`Bybit ${sym}: 데이터 없음`);
-  return data.result.list.slice().reverse().map(k => ({
-    date: new Date(+k[0]).toISOString().slice(0,16).replace('T',' '),
-    t: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4],
-    volume: +k[5], adjclose: +k[4],
-  }));
+  const tryFetch = async (u) => {
+    const r = await fetch(u, {signal: AbortSignal.timeout(8000)});
+    if (!r.ok) throw new Error(`${r.status}`);
+    const d = await r.json();
+    let data = d?.contents ? JSON.parse(d.contents) : d;
+    if (!data.result?.list?.length) throw new Error('데이터 없음');
+    return data.result.list.slice().reverse().map(k => ({
+      date: new Date(+k[0]).toISOString().slice(0,16).replace('T',' '),
+      t: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4],
+      volume: +k[5], adjclose: +k[4],
+    }));
+  };
+  try { return await tryFetch(url); } catch(e1) {
+    for (const mkp of PROXY_LIST) {
+      try { return await tryFetch(mkp(url)); } catch {}
+    }
+    throw new Error(`Bybit ${sym}: 데이터 없음`);
+  }
 }
 
 async function resolveBinanceSymbol(query) {
@@ -785,20 +861,25 @@ async function fetchCurrentPrice(query, mode='auto') {
 async function fetchOHLCV(query, range='6mo', mode='auto') {
   let {ticker, type} = resolveTicker(query, mode);
   if (type === 'crypto') {
-    // Try Binance first for real volume data
+    const limitMap = {'1mo':90,'3mo':180,'6mo':300,'1y':365,'2y':500,'5y':700};
+    const limit = limitMap[range] || 300;
+    const daysMap  = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
+    const days = daysMap[range] || 180;
+    const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
+    const errors = [];
+    // 1) Binance
+    try { const s = await resolveBinanceSymbol(query); return await fetchBinanceKlines(s,'1d',limit); }
+    catch(e) { errors.push('Binance: '+e.message); }
+    // 2) OKX
+    try { return await fetchOKXKlines(sym,'1d',limit); } catch(e) { errors.push('OKX: '+e.message); }
+    // 3) Bybit
+    try { return await fetchBybitKlines(sym,'1d',limit); } catch(e) { errors.push('Bybit: '+e.message); }
+    // 4) CoinGecko
     try {
-      const symbol = await resolveBinanceSymbol(query);
-      // Map range to Binance limit
-      const limitMap = {'1mo':90,'3mo':180,'6mo':300,'1y':365,'2y':500,'5y':700};
-      const limit = limitMap[range] || 300;
-      return await fetchBinanceKlines(symbol, '1d', limit);
-    } catch {
-      // Fallback to CoinGecko
       if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
-      const daysMap = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
-      const days = daysMap[range] || 180;
-      return fetchCryptoOHLCV(ticker, days);
-    }
+      return await fetchCryptoOHLCV(ticker, days);
+    } catch(e) { errors.push('CoinGecko: '+e.message); }
+    throw new Error(`코인 데이터를 가져올 수 없습니다. 심볼/이름을 확인해주세요.\n(${errors.slice(0,2).join(' | ')})`);
   }
   return fetchYahooOHLCV(ticker, range);
 }
