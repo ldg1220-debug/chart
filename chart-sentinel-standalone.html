@@ -560,7 +560,11 @@ async function fetchYahooOHLCV(ticker, range='6mo', interval='1d') {
   const data = await fetchViaProxies(yfUrl);
   if(data) return parseYahooResponse(data);
 
-  // 최후 폴백: Stooq (한국 제외 주요 미국 주식)
+  // 분봉/시간봉은 Stooq 폴백 불가 (일봉만 지원) — 에러를 그대로 올려서 UI에 표시
+  if(interval !== '1d' && interval !== '1wk' && interval !== '1mo') {
+    throw new Error(`${ticker} 분봉/시간봉 데이터를 가져올 수 없습니다.\n브라우저 CORS 제한으로 주식 단기 봉은 직접 접근이 어렵습니다.\n일봉(1d) / 주봉 / 월봉을 사용해주세요.`);
+  }
+  // 일봉/주봉/월봉은 Stooq 폴백
   return fetchStooq(ticker, range);
 }
 
@@ -695,188 +699,358 @@ function rsi(closes, period=14) {
 }
 
 // ─── SVG Interactive Chart ───────────────────────────────────────────────────
-function buildCandleChart(candles, ticker='', w=960, ch=280, vh=60, rh=56) {
+function buildCandleChart(candles, ticker='', w=960, ch=290, vh=65, rh=58) {
   if (!candles || candles.length < 2) return '<div style="color:#64748b;padding:20px;text-align:center">데이터 없음</div>';
-  const totalH = ch + vh + 16 + 8 + rh + 14;
+
+  const EXTRA = 10; // 우측 빈 캔들 공간
+  const totalSlots = candles.length + EXTRA;
+  const totalH = ch + vh + 16 + 8 + rh + 16;
+
   const closes = candles.map(c=>c.close), highs=candles.map(c=>c.high);
-  const lows=candles.map(c=>c.low), vols=candles.map(c=>c.volume||0);
+  const lows   = candles.map(c=>c.low),   vols =candles.map(c=>c.volume||0);
+
   let maxP=Math.max(...highs), minP=Math.min(...lows);
+  const pad=(maxP-minP)*0.04; maxP+=pad; minP=Math.max(0,minP-pad);
   const rangeP=maxP-minP||1, maxV=Math.max(...vols,1);
-  const barW=w/candles.length;
-  const toY=p=>ch-((p-minP)/rangeP)*ch;
-  const toVY=v=>ch+10+(vh-(v/maxV)*vh);
-  const cxOf=i=>i*barW+barW*0.5;
+
+  const barW = w / totalSlots;
+  const toY  = p => ch - ((p-minP)/rangeP)*ch;
+  const toVY = v => ch+10+(vh-(v/maxV)*vh);
+  const cxOf = i => i*barW + barW*0.5;
 
   // Candlesticks
   const priceParts=candles.map((c,i)=>{
-    const x=i*barW+barW*0.12, bw=Math.max(barW*0.76,1), cx=x+bw/2;
-    const up=c.close>=c.open, color=up?'#4ade80':'#f87171';
-    const bodyTop=toY(Math.max(c.open,c.close)), bodyBot=toY(Math.min(c.open,c.close));
-    const bodyH=Math.max(bodyBot-bodyTop,1), ws=barW>3?1:0.5;
-    return `<line x1="${cx.toFixed(1)}" y1="${toY(c.high).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${toY(c.low).toFixed(1)}" stroke="${color}" stroke-width="${ws}"/><rect x="${x.toFixed(1)}" y="${bodyTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${color}"/>`;
+    const x=i*barW+barW*0.1, bw=Math.max(barW*0.8,1), cx=x+bw/2;
+    const up=c.close>=c.open, col=up?'#4ade80':'#f87171';
+    const bt=toY(Math.max(c.open,c.close)), bb=toY(Math.min(c.open,c.close));
+    const bh=Math.max(bb-bt,1), ws=barW>4?1:0.5;
+    return `<line x1="${cx.toFixed(1)}" y1="${toY(c.high).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${toY(c.low).toFixed(1)}" stroke="${col}" stroke-width="${ws}"/>` +
+           `<rect x="${x.toFixed(1)}" y="${bt.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
   }).join('');
 
   // Volume bars
   const volParts=candles.map((c,i)=>{
-    const x=i*barW+barW*0.12, bw=Math.max(barW*0.76,1);
-    const color=c.close>=c.open?'#4ade80':'#f87171';
+    const x=i*barW+barW*0.1, bw=Math.max(barW*0.8,1);
+    const col=c.close>=c.open?'rgba(74,222,128,0.5)':'rgba(248,113,113,0.5)';
     const y=toVY(c.volume||0), bh=ch+10+vh-y;
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(bh,0).toFixed(1)}" fill="${color}" opacity="0.5"/>`;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(bh,0).toFixed(1)}" fill="${col}"/>`;
   }).join('');
 
-  // MA lines
-  const polyline=(vals,color,sw,dash='')=>{
+  // MA/VWMA lines
+  const pline=(vals,col,sw)=>{
     const pts=[];
     for(let i=0;i<vals.length;i++){if(vals[i]==null)continue;pts.push(`${cxOf(i).toFixed(1)},${toY(vals[i]).toFixed(1)}`);}
     if(pts.length<2)return '';
-    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-dasharray="${dash}" vector-effect="non-scaling-stroke" opacity="0.9"/>`;
+    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="${sw}" vector-effect="non-scaling-stroke" opacity="0.88"/>`;
   };
-  const ma7v  =movingAverage(closes,7);
-  const ma25v =movingAverage(closes,25);
-  const ma99v =movingAverage(closes,99);
-  const vwma100v=vwma(candles,100);
-  const maLayer=
-    polyline(ma7v,   '#fbbf24',1.3)+
-    polyline(ma25v,  '#60a5fa',1.3)+
-    polyline(ma99v,  '#a78bfa',1.4)+
-    polyline(vwma100v,'#ec4899',2.2);
+  const ma7v=movingAverage(closes,7), ma25v=movingAverage(closes,25);
+  const ma99v=movingAverage(closes,99), vwma100v=vwma(candles,100);
+  const maLayer=pline(ma7v,'#fbbf24',1.3)+pline(ma25v,'#60a5fa',1.3)+pline(ma99v,'#a78bfa',1.4)+pline(vwma100v,'#ec4899',2.0);
 
   // Fibonacci (last 90 candles)
   const n90=Math.min(90,candles.length);
-  const fibHigh=Math.max(...highs.slice(-n90)), fibLow=Math.min(...lows.slice(-n90));
-  const fibRange=fibHigh-fibLow;
-  const FIB_R=[0.236,0.382,0.500,0.618,0.786];
-  const FIB_C=['#94a3b8','#fbbf24','#60a5fa','#4ade80','#f472b6'];
-  const fibLines=fibRange>0?FIB_R.map((r,i)=>{
-    const fy=toY(fibHigh-r*fibRange).toFixed(1);
-    return `<line x1="0" y1="${fy}" x2="${w}" y2="${fy}" stroke="${FIB_C[i]}" stroke-width="0.9" stroke-dasharray="5,4" vector-effect="non-scaling-stroke" opacity="0.7"/>`;
+  const fH=Math.max(...highs.slice(-n90)), fL=Math.min(...lows.slice(-n90)), fR=fH-fL;
+  const FR=[0.236,0.382,0.500,0.618,0.786], FC=['#94a3b8','#fbbf24','#60a5fa','#4ade80','#f472b6'];
+  // Lines extend through EXTRA zone too
+  const fibLines=fR>0?FR.map((r,i)=>{
+    const fy=toY(fH-r*fR).toFixed(1);
+    return `<line x1="0" y1="${fy}" x2="${w+barW*EXTRA}" y2="${fy}" stroke="${FC[i]}" stroke-width="0.9" stroke-dasharray="5,4" vector-effect="non-scaling-stroke" opacity="0.65"/>`;
   }).join(''):'';
-  const fibLabels=fibRange>0?FIB_R.map((r,i)=>{
-    const fp=fibHigh-r*fibRange, fy=toY(fp);
+  // Fib inline price labels (right edge, JS updates Y on zoom)
+  const fibInline=fR>0?FR.map((r,i)=>{
+    const fp=fH-r*fR, fy=toY(fp);
     const txt=fp>=1?fp.toFixed(2):fp.toPrecision(4);
-    const lw=txt.length*6+10;
-    return `<rect x="${(w-lw-3).toFixed(1)}" y="${(fy-7).toFixed(1)}" width="${lw}" height="13" fill="#0b0e14" opacity="0.85" rx="2" stroke="${FIB_C[i]}" stroke-width="0.7"/><text x="${(w-lw/2-3).toFixed(1)}" y="${(fy+3).toFixed(1)}" fill="${FIB_C[i]}" font-size="10" font-weight="700" font-family="monospace" text-anchor="middle">${txt}</text>`;
+    const lw=txt.length*6+10, lx=w-lw-4;
+    return `<rect id="cs-fb${i}" data-fp="${fp}" x="${lx.toFixed(1)}" y="${(fy-7).toFixed(1)}" width="${lw}" height="13" fill="#0b0e14" opacity="0.88" rx="2" stroke="${FC[i]}" stroke-width="0.7"/>` +
+           `<text id="cs-ft${i}" data-fp="${fp}" x="${(lx+lw/2).toFixed(1)}" y="${(fy+3).toFixed(1)}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace" text-anchor="middle">${txt}</text>`;
   }).join(''):'';
 
   // RSI panel
-  const rsiTop=ch+vh+24;
-  const toRY=v=>rsiTop+rh-(Math.min(100,Math.max(0,v))/100)*rh;
-  const rsi14v=rsi(closes,14);
-  const rsiPts=[];
+  const rsiTop=ch+vh+24, toRY=v=>rsiTop+rh-(Math.min(100,Math.max(0,v))/100)*rh;
+  const rsi14v=rsi(closes,14), rsiPts=[];
   for(let i=0;i<rsi14v.length;i++){if(rsi14v[i]==null)continue;rsiPts.push(`${cxOf(i).toFixed(1)},${toRY(rsi14v[i]).toFixed(1)}`);}
   const currRSI=rsi14v.reduce((l,v)=>v!=null?v:l,null);
-  const rsiColor=!currRSI?'#94a3b8':currRSI<30?'#4ade80':currRSI>70?'#ef4444':'#a78bfa';
-  const rsiBg=`<line x1="0" y1="${rsiTop-5}" x2="${w}" y2="${rsiTop-5}" stroke="#243045" stroke-width="0.7"/>
-    <rect x="0" y="${rsiTop}" width="${w}" height="${rh}" fill="rgba(11,14,20,0.2)"/>
-    <line x1="0" y1="${toRY(70).toFixed(1)}" x2="${w}" y2="${toRY(70).toFixed(1)}" stroke="#ef4444" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.65"/>
-    <line x1="0" y1="${toRY(50).toFixed(1)}" x2="${w}" y2="${toRY(50).toFixed(1)}" stroke="#475569" stroke-width="0.5" opacity="0.4"/>
-    <line x1="0" y1="${toRY(30).toFixed(1)}" x2="${w}" y2="${toRY(30).toFixed(1)}" stroke="#4ade80" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.65"/>`;
-  const rsiLine=rsiPts.length>=2?`<polyline points="${rsiPts.join(' ')}" fill="none" stroke="${rsiColor}" stroke-width="1.5" vector-effect="non-scaling-stroke" opacity="0.95"/>`:'';
-  const rsiLabelEl=`<text x="4" y="${rsiTop+12}" fill="#cbd5e1" font-size="11" font-weight="700">RSI(14)</text>
-    <text x="52" y="${toRY(70)-3}" fill="#ef4444" font-size="10" font-weight="700">70</text>
-    <text x="52" y="${toRY(30)+11}" fill="#4ade80" font-size="10" font-weight="700">30</text>
-    ${currRSI!=null?`<text x="${w-4}" y="${rsiTop+12}" fill="${rsiColor}" font-size="12" text-anchor="end" font-weight="800">RSI ${currRSI.toFixed(1)}</text>`:''}`;
+  const rsiCol=!currRSI?'#94a3b8':currRSI<30?'#4ade80':currRSI>70?'#ef4444':'#a78bfa';
+  const rsiBg=`<line x1="0" y1="${rsiTop-6}" x2="${w}" y2="${rsiTop-6}" stroke="#243045" stroke-width="0.7"/>
+<rect x="0" y="${rsiTop}" width="${w}" height="${rh}" fill="rgba(11,14,20,0.22)"/>
+<line x1="0" y1="${toRY(70).toFixed(1)}" x2="${w}" y2="${toRY(70).toFixed(1)}" stroke="#ef4444" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.6"/>
+<line x1="0" y1="${toRY(50).toFixed(1)}" x2="${w}" y2="${toRY(50).toFixed(1)}" stroke="#475569" stroke-width="0.5" opacity="0.35"/>
+<line x1="0" y1="${toRY(30).toFixed(1)}" x2="${w}" y2="${toRY(30).toFixed(1)}" stroke="#4ade80" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.6"/>`;
+  const rsiLine=rsiPts.length>=2?`<polyline points="${rsiPts.join(' ')}" fill="none" stroke="${rsiCol}" stroke-width="1.5" vector-effect="non-scaling-stroke" opacity="0.95"/>`:'';
+  const rsiLabels=`<text x="4" y="${rsiTop+12}" fill="#cbd5e1" font-size="11" font-weight="700">RSI(14)</text>
+<text x="54" y="${(toRY(70)-3).toFixed(1)}" fill="#ef4444" font-size="10" font-weight="700">70</text>
+<text x="54" y="${(toRY(30)+11).toFixed(1)}" fill="#4ade80" font-size="10" font-weight="700">30</text>
+${currRSI!=null?`<text x="${w-4}" y="${rsiTop+12}" fill="${rsiCol}" font-size="12" text-anchor="end" font-weight="800">RSI ${currRSI.toFixed(1)}</text>`:''}`;
 
-  // Grid lines + price labels
+  // Grid (IDs so JS can update labels on zoom)
   const grid=[0,0.25,0.5,0.75,1].map((t,i)=>{
     const y=ch-t*ch, p=minP+t*rangeP;
     const lbl=p>=1?p.toFixed(2):p.toPrecision(4);
-    const showLbl=y>82;
-    return `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#243045" stroke-width="0.4" opacity="0.5"/>${showLbl?`<text x="4" y="${(y-3).toFixed(1)}" fill="#94a3b8" font-size="10" font-weight="600">${lbl}</text>`:''}`;
+    return `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#243045" stroke-width="0.4" opacity="0.45"/>` +
+           (y>80?`<text id="cs-gl${i}" x="4" y="${(y-3).toFixed(1)}" fill="#94a3b8" font-size="10" font-weight="600">${lbl}</text>`:'');
   }).join('');
 
-  // Time axis
-  const step=Math.max(1,Math.floor(candles.length/6));
-  const timeLabels=candles.filter((_,i)=>i%step===0||i===candles.length-1).map((c,_,arr)=>{
-    const i=candles.indexOf(c);
+  // Time axis labels (updated by JS on zoom)
+  const step=Math.max(1,Math.floor(candles.length/7));
+  const timeLabels=candles.reduce((acc,c,i)=>{
+    if(i%step!==0 && i!==candles.length-1) return acc;
     const x=cxOf(i);
-    const lbl=typeof c.date==='string'?c.date.slice(5,10):'';
-    return `<text x="${x.toFixed(1)}" y="${totalH-3}" fill="#64748b" font-size="10" text-anchor="middle">${lbl}</text>`;
-  }).join('');
+    let lbl='';
+    if(c.t){const d=new Date(c.t);lbl=`${d.getMonth()+1}/${d.getDate()}`;}
+    else if(typeof c.date==='string') lbl=c.date.slice(5,10);
+    return acc+`<text id="cs-tl${i}" x="${x.toFixed(1)}" y="${totalH-4}" fill="#52525b" font-size="10" text-anchor="middle">${lbl}</text>`;
+  },'');
 
   // Legend
-  const legend=`<rect x="4" y="4" width="108" height="70" fill="#0b0e14" opacity="0.85" rx="3" stroke="#243045" stroke-width="0.5"/>
-    <text x="12" y="18" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace">━ MA7</text>
-    <text x="12" y="32" fill="#60a5fa" font-size="11" font-weight="700" font-family="monospace">━ MA25</text>
-    <text x="12" y="46" fill="#a78bfa" font-size="11" font-weight="700" font-family="monospace">━ MA99</text>
-    <text x="12" y="60" fill="#ec4899" font-size="11" font-weight="800" font-family="monospace">━ VWMA100</text>`;
+  const legend=`<rect x="4" y="4" width="112" height="72" fill="#0b0e14" opacity="0.88" rx="3" stroke="#243045" stroke-width="0.5"/>
+<text x="12" y="20" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace">━ MA7</text>
+<text x="12" y="35" fill="#60a5fa" font-size="11" font-weight="700" font-family="monospace">━ MA25</text>
+<text x="12" y="50" fill="#a78bfa" font-size="11" font-weight="700" font-family="monospace">━ MA99</text>
+<text x="12" y="65" fill="#ec4899" font-size="11" font-weight="800" font-family="monospace">━ VWMA100</text>`;
 
-  // Fib legend box
-  const fibBox=fibRange>0?`<g>
-    <rect x="${w-172}" y="4" width="168" height="82" fill="#0b0e14" opacity="0.85" rx="3" stroke="#243045" stroke-width="0.5"/>
-    <text x="${w-164}" y="16" fill="#94a3b8" font-size="10" font-weight="700">Fib · 90봉 기준</text>
-    ${FIB_R.map((r,i)=>{
-      const fp=fibHigh-r*fibRange, lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);
-      return `<text x="${w-164}" y="${28+i*13}" fill="${FIB_C[i]}" font-size="10" font-weight="700" font-family="monospace">Fib ${r}  ${lbl}</text>`;
-    }).join('')}
-  </g>`:'';
+  // Fib legend (top-right)
+  const fibBox=fR>0?`<rect x="${w-176}" y="4" width="172" height="84" fill="#0b0e14" opacity="0.88" rx="3" stroke="#243045" stroke-width="0.5"/>
+<text x="${w-168}" y="16" fill="#94a3b8" font-size="10" font-weight="700">Fib · 90봉 기준</text>
+${FR.map((r,i)=>{const fp=fH-r*fR,lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);return `<text x="${w-168}" y="${30+i*13}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace">Fib ${r}  ${lbl}</text>`;}).join('')}`:'';
 
-  // Vol label
-  const volLabel=`<text x="4" y="${ch+12}" fill="#94a3b8" font-size="10" font-weight="600">Vol</text>`;
-  const divider=`<line x1="0" y1="${ch+5}" x2="${w}" y2="${ch+5}" stroke="#243045" stroke-width="0.5"/>`;
+  const divider=`<line x1="0" y1="${ch+6}" x2="${w}" y2="${ch+6}" stroke="#243045" stroke-width="0.5"/>`;
+  const volLabel=`<text x="4" y="${ch+14}" fill="#94a3b8" font-size="10" font-weight="600">Vol</text>`;
 
-  // Crosshair (interactive via JS)
+  // OHLC tooltip
+  const tooltip=`<g id="cs-tip" style="display:none;pointer-events:none;">
+<rect id="cs-tip-bg" x="0" y="0" width="166" height="106" fill="#0b0e14" opacity="0.96" rx="4" stroke="#334155" stroke-width="0.7"/>
+<text id="cs-tip-dt"  x="0" y="0" fill="#e2e8f0" font-size="11" font-weight="800" font-family="monospace"/>
+<text id="cs-tip-o"   x="0" y="0" fill="#94a3b8" font-size="11" font-family="monospace"/>
+<text id="cs-tip-h"   x="0" y="0" fill="#4ade80" font-size="11" font-family="monospace"/>
+<text id="cs-tip-l"   x="0" y="0" fill="#f87171" font-size="11" font-family="monospace"/>
+<text id="cs-tip-c"   x="0" y="0" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace"/>
+<text id="cs-tip-v"   x="0" y="0" fill="#a78bfa" font-size="11" font-family="monospace"/>
+<text id="cs-tip-chg" x="0" y="0" font-size="11" font-weight="700" font-family="monospace"/>
+</g>`;
+
+  // Crosshair
   const crosshair=`<g id="cs-ch" style="display:none;pointer-events:none;">
-    <line id="cs-vl" x1="0" y1="0" x2="0" y2="${totalH-14}" stroke="#94a3b8" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.6"/>
-    <line id="cs-hl" x1="0" y1="0" x2="${w}" y2="0" stroke="#94a3b8" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.6"/>
-    <rect id="cs-pb" x="0" y="0" width="72" height="14" fill="#1e293b" stroke="#fbbf24" stroke-width="0.6" rx="2"/>
-    <text id="cs-pt" x="0" y="0" fill="#fbbf24" font-size="10" font-weight="700" font-family="monospace" text-anchor="middle"></text>
-    <rect id="cs-db" x="0" y="${totalH-16}" width="60" height="13" fill="#1e293b" stroke="#475569" stroke-width="0.5" rx="2"/>
-    <text id="cs-dt" x="0" y="${totalH-6}" fill="#94a3b8" font-size="10" font-weight="600" font-family="monospace" text-anchor="middle"></text>
-  </g>`;
+<line id="cs-vl" x1="0" y1="0" x2="0" y2="${totalH-14}" stroke="#94a3b8" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.55"/>
+<line id="cs-hl" x1="0" y1="0" x2="${w}" y2="0" stroke="#94a3b8" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.55"/>
+<rect id="cs-pb" x="0" y="0" width="86" height="15" fill="#1e293b" stroke="#fbbf24" stroke-width="0.6" rx="2"/>
+<text id="cs-pt" x="0" y="0" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace" text-anchor="middle"/>
+<rect id="cs-db" x="0" y="${totalH-17}" width="72" height="14" fill="#1e293b" stroke="#475569" stroke-width="0.5" rx="2"/>
+<text id="cs-dt" x="0" y="${totalH-6}" fill="#94a3b8" font-size="10" font-weight="600" font-family="monospace" text-anchor="middle"/>
+</g>`;
 
-  window.__csChart={candles,w,ch,vh,rh,rsiTop,totalH,minP,maxP,rangeP,maxV,barW};
+  window.__csChart={candles,w,ch,vh,rh,rsiTop,totalH,minP,maxP,rangeP,maxV,barW,totalSlots,EXTRA};
 
-  return `<svg id="cs-svg" viewBox="0 0 ${w} ${totalH}" preserveAspectRatio="none" style="display:block;width:100%;cursor:crosshair;touch-action:none;">${grid}${rsiBg}<g id="cs-zg"><g id="cs-price">${fibLines}${priceParts}${maLayer}</g><g id="cs-vol">${volParts}</g><g id="cs-rsi">${rsiLine}</g></g>${fibLabels}${divider}${legend}${fibBox}${rsiLabelEl}${timeLabels}${volLabel}${crosshair}</svg>`;
+  return `<svg id="cs-svg" viewBox="0 0 ${w} ${totalH}" preserveAspectRatio="none" style="display:block;width:100%;cursor:crosshair;touch-action:none;user-select:none;">${grid}${rsiBg}<g id="cs-zg"><g id="cs-price">${fibLines}${priceParts}${maLayer}</g><g id="cs-vol">${volParts}</g><g id="cs-rsi">${rsiLine}</g></g>${fibInline}${divider}${legend}${fibBox}${rsiLabels}${timeLabels}${volLabel}${tooltip}${crosshair}</svg>`;
 }
 
 function attachChartHandlers(container) {
   const svg=container.querySelector('#cs-svg');
-  if(!svg)return;
-  const d=window.__csChart;
-  if(!d)return;
-  const ch_g=container.querySelector('#cs-ch');
-  const vl=container.querySelector('#cs-vl');
-  const hl=container.querySelector('#cs-hl');
-  const pb=container.querySelector('#cs-pb');
-  const pt=container.querySelector('#cs-pt');
-  const db=container.querySelector('#cs-db');
-  const dt=container.querySelector('#cs-dt');
+  if(!svg||!window.__csChart)return;
+  const D=window.__csChart;
+  const {candles,w,ch,vh,rh,rsiTop,totalH,minP,maxP,rangeP,maxV,barW,totalSlots,EXTRA}=D;
 
-  const onMove=e=>{
-    if(!ch_g)return;
-    const rect=svg.getBoundingClientRect();
-    const clientX=(e.touches?e.touches[0].clientX:e.clientX);
-    const clientY=(e.touches?e.touches[0].clientY:e.clientY);
-    const px=(clientX-rect.left)/rect.width*d.w;
-    const py=(clientY-rect.top)/rect.height*d.totalH;
-    const idx=Math.min(Math.max(Math.floor(px/d.barW),0),d.candles.length-1);
-    const c=d.candles[idx];
-    if(!c)return;
-    ch_g.style.display='';
-    if(vl){vl.setAttribute('x1',px.toFixed(1));vl.setAttribute('x2',px.toFixed(1));}
-    if(hl){hl.setAttribute('y1',py.toFixed(1));hl.setAttribute('y2',py.toFixed(1));}
-    if(pt){
-      const price=d.minP+((d.ch-Math.min(Math.max(py,0),d.ch))/d.ch)*d.rangeP;
-      const lbl=price>=1?price.toFixed(2):price.toPrecision(4);
-      const bx=Math.min(px-36,d.w-76);
-      if(pb){pb.setAttribute('x',bx.toFixed(1));pb.setAttribute('y',(py-7).toFixed(1));}
-      pt.setAttribute('x',(bx+36).toFixed(1));pt.setAttribute('y',(py+3).toFixed(1));
-      pt.textContent=lbl;
+  const zoomG   = container.querySelector('#cs-zg');
+  const czPrice = container.querySelector('#cs-price');
+  const czVol   = container.querySelector('#cs-vol');
+  const gridLbls= [0,1,2,3,4].map(i=>container.querySelector(`#cs-gl${i}`));
+  const fibRects= [0,1,2,3,4].map(i=>container.querySelector(`#cs-fb${i}`));
+  const fibTexts= [0,1,2,3,4].map(i=>container.querySelector(`#cs-ft${i}`));
+
+  let scale=1, panX=0;
+  let curMinP=minP, curMaxP=maxP, curRangeP=rangeP;
+
+  const fmtP=p=>p>=1?p.toFixed(3):p>=0.01?p.toFixed(5):p.toExponential(2);
+  const fmtV=v=>v>=1e9?(v/1e9).toFixed(2)+'B':v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'K':String(Math.round(v));
+
+  // ── Y 자동 맞춤: 현재 가시 범위의 캔들로 최대/최소 재계산 ─────────────
+  const recomputeY=()=>{
+    const li=Math.max(0,Math.floor(panX/barW));
+    const ri=Math.min(candles.length-1,Math.ceil((panX+w/scale)/barW));
+    let vMin=Infinity,vMax=-Infinity,vMaxV=1;
+    for(let i=li;i<=ri;i++){
+      const c=candles[i];if(!c)continue;
+      if(c.high>vMax)vMax=c.high;if(c.low<vMin)vMin=c.low;
+      if((c.volume||0)>vMaxV)vMaxV=c.volume||0;
     }
-    if(dt){
-      const lbl=typeof c.date==='string'?c.date.slice(5,10):'';
-      const bx=Math.min(Math.max(px-30,0),d.w-64);
-      if(db)db.setAttribute('x',bx.toFixed(1));
-      dt.setAttribute('x',(bx+30).toFixed(1));
-      dt.textContent=lbl;
+    if(!isFinite(vMax)||vMax<=vMin){vMin=minP;vMax=maxP;vMaxV=maxV;}
+    const pad=(vMax-vMin)*0.05;vMax+=pad;vMin=Math.max(0,vMin-pad);
+    curMinP=vMin;curMaxP=vMax;curRangeP=vMax-vMin;
+    // Price Y SVG transform
+    const syP=rangeP/curRangeP, tyP=syP*ch*((vMax-minP)/rangeP-1);
+    if(czPrice)czPrice.setAttribute('transform',`translate(0,${tyP.toFixed(2)}) scale(1,${syP.toFixed(4)})`);
+    // Vol Y SVG transform
+    if(czVol&&vMaxV>0){
+      const syV=maxV/vMaxV, tyV=(1-syV)*(ch+10+vh);
+      czVol.setAttribute('transform',`translate(0,${tyV.toFixed(2)}) scale(1,${syV.toFixed(4)})`);
+    }
+    // Update grid price labels
+    const vR=vMax-vMin;
+    [0,0.25,0.5,0.75,1].forEach((t,i)=>{
+      const el=gridLbls[i];if(!el)return;
+      const p=vMax-t*vR;
+      el.textContent=p>=1?p.toFixed(2):p.toPrecision(4);
+    });
+    // Update Fib inline label Y positions
+    const newYFor=p=>ch*(1-(p-vMin)/vR);
+    for(let i=0;i<5;i++){
+      const fb=fibRects[i],ft=fibTexts[i];if(!fb||!ft)continue;
+      const fp=parseFloat(fb.getAttribute('data-fp'));
+      const ny=newYFor(fp);
+      if(ny<-14||ny>ch+14){fb.style.display='none';ft.style.display='none';}
+      else{fb.style.display='';ft.style.display='';
+        fb.setAttribute('y',(ny-7).toFixed(1));ft.setAttribute('y',(ny+3).toFixed(1));}
     }
   };
-  const onLeave=()=>{if(ch_g)ch_g.style.display='none';};
-  svg.addEventListener('mousemove',onMove);
-  svg.addEventListener('mouseleave',onLeave);
-  svg.addEventListener('touchmove',e=>{e.preventDefault();onMove(e);},{passive:false});
-  svg.addEventListener('touchend',onLeave);
+
+  const apply=()=>{
+    if(zoomG)zoomG.setAttribute('transform',`translate(${(-panX*scale).toFixed(2)},0) scale(${scale.toFixed(4)},1)`);
+    recomputeY();
+  };
+
+  // panX range: 0 → allow scrolling to right including EXTRA empty candles
+  const clampPan=()=>{
+    const maxPan=(totalSlots/candles.length)*w*(1-1/scale)+barW*EXTRA*0;
+    // Extend right limit to show EXTRA slots
+    const rightLimit=totalSlots*barW-w/scale;
+    panX=Math.max(0,Math.min(Math.max(0,rightLimit),panX));
+  };
+
+  recomputeY();
+  svg.style.userSelect='none';
+
+  // ── Crosshair elements ──────────────────────────────────────────────────
+  const chG=container.querySelector('#cs-ch');
+  const vl =container.querySelector('#cs-vl');
+  const hl =container.querySelector('#cs-hl');
+  const pb =container.querySelector('#cs-pb');
+  const pt =container.querySelector('#cs-pt');
+  const db =container.querySelector('#cs-db');
+  const dt =container.querySelector('#cs-dt');
+  const tipG  =container.querySelector('#cs-tip');
+  const tipBg =container.querySelector('#cs-tip-bg');
+  const tipDt =container.querySelector('#cs-tip-dt');
+  const tipO  =container.querySelector('#cs-tip-o');
+  const tipH  =container.querySelector('#cs-tip-h');
+  const tipL  =container.querySelector('#cs-tip-l');
+  const tipC  =container.querySelector('#cs-tip-c');
+  const tipV  =container.querySelector('#cs-tip-v');
+  const tipChg=container.querySelector('#cs-tip-chg');
+
+  let isDragging=false;
+
+  const hideCH=()=>{if(chG)chG.style.display='none';if(tipG)tipG.style.display='none';};
+
+  const updateCH=e=>{
+    if(isDragging)return;
+    const rect=svg.getBoundingClientRect();
+    const mxV=(e.clientX-rect.left)/rect.width*w;
+    const myV=(e.clientY-rect.top)/rect.height*totalH;
+    const dataX=mxV/scale+panX;
+    const idx=Math.max(0,Math.min(candles.length-1,Math.floor(dataX/barW)));
+    const c=candles[idx];
+    if(!c||!chG)return;
+    chG.style.display='';
+    // Snap vertical line to candle center
+    const csx=((idx*barW+barW/2)-panX)*scale;
+    if(vl){vl.setAttribute('x1',csx.toFixed(1));vl.setAttribute('x2',csx.toFixed(1));}
+    if(hl){hl.setAttribute('y1',myV.toFixed(1));hl.setAttribute('y2',myV.toFixed(1));}
+    // Price label
+    if(pt&&pb&&myV<=ch){
+      const price=curMinP+(1-myV/ch)*curRangeP;
+      const lbl='$'+fmtP(price);
+      const lx=w-90,ly=Math.max(8,Math.min(totalH-20,myV-8));
+      pb.setAttribute('x',lx);pb.setAttribute('y',ly);
+      pt.setAttribute('x',lx+43);pt.setAttribute('y',ly+11);
+      pt.textContent=lbl;pb.style.display='';pt.style.display='';
+    } else if(pt){pt.style.display='none';if(pb)pb.style.display='none';}
+    // Date label
+    if(db&&dt){
+      let lbl='';
+      if(c.t){const d=new Date(c.t);lbl=`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
+      else if(typeof c.date==='string')lbl=c.date.slice(5,16);
+      const dbw=Math.max(72,lbl.length*7);
+      db.setAttribute('width',dbw);
+      const dx=Math.max(dbw/2+2,Math.min(w-dbw/2-2,csx));
+      db.setAttribute('x',(dx-dbw/2).toFixed(1));dt.setAttribute('x',dx.toFixed(1));dt.textContent=lbl;
+    }
+    // OHLC Tooltip
+    if(tipG&&tipBg){
+      tipG.style.display='';
+      const bw=166,bh=106;
+      let tx=csx+14;if(tx+bw>w-4)tx=csx-bw-14;if(tx<4)tx=4;
+      const ty=Math.max(4,Math.min(totalH-bh-4,myV-bh/2));
+      tipBg.setAttribute('x',tx);tipBg.setAttribute('y',ty);
+      const ox=tx+10;
+      let dstr='';
+      if(c.t){const d=new Date(c.t);dstr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
+      else if(typeof c.date==='string')dstr=c.date;
+      const pos=(el,y)=>{if(el){el.setAttribute('x',ox);el.setAttribute('y',ty+y);}};
+      pos(tipDt,14);pos(tipO,28);pos(tipH,42);pos(tipL,56);pos(tipC,70);pos(tipV,84);pos(tipChg,100);
+      if(tipDt)tipDt.textContent=dstr;
+      if(tipO)tipO.textContent=`O  $${fmtP(c.open)}`;
+      if(tipH)tipH.textContent=`H  $${fmtP(c.high)}`;
+      if(tipL)tipL.textContent=`L  $${fmtP(c.low)}`;
+      if(tipC)tipC.textContent=`C  $${fmtP(c.close)}`;
+      if(tipV)tipV.textContent=`Vol ${fmtV(c.volume||0)}`;
+      const chg=c.open>0?((c.close-c.open)/c.open*100):0;
+      if(tipChg){tipChg.textContent=`${chg>=0?'+':''}${chg.toFixed(2)}%`;tipChg.setAttribute('fill',chg>=0?'#4ade80':'#f87171');}
+    }
+  };
+
+  // ── 마우스 휠 줌 (마우스 위치 기준) ─────────────────────────────────────
+  svg.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const rect=svg.getBoundingClientRect();
+    const fx=(e.clientX-rect.left)/rect.width;
+    const anchor=panX+fx*w/scale;
+    const factor=e.deltaY>0?1/1.18:1.18;
+    scale=Math.max(1,Math.min(60,scale*factor));
+    panX=anchor-fx*w/scale;
+    clampPan();apply();updateCH(e);
+  },{passive:false});
+
+  // ── 터치 핀치 줌 ─────────────────────────────────────────────────────────
+  let lastDist=null;
+  svg.addEventListener('touchstart',e=>{
+    if(e.touches.length===2)lastDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+  },{passive:true});
+  svg.addEventListener('touchmove',e=>{
+    if(e.touches.length===2&&lastDist){
+      e.preventDefault();
+      const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+      const rect=svg.getBoundingClientRect();
+      const mx=(e.touches[0].clientX+e.touches[1].clientX)/2;
+      const fx=(mx-rect.left)/rect.width;
+      const anchor=panX+fx*w/scale;
+      scale=Math.max(1,Math.min(60,scale*dist/lastDist));
+      panX=anchor-fx*w/scale;
+      clampPan();apply();lastDist=dist;
+    }
+  },{passive:false});
+  svg.addEventListener('touchend',()=>{lastDist=null;});
+
+  // ── 드래그 팬 ─────────────────────────────────────────────────────────────
+  let dragSt=null;
+  svg.addEventListener('pointerdown',e=>{
+    isDragging=true;
+    dragSt={x:e.clientX,panX};
+    svg.setPointerCapture(e.pointerId);
+    svg.style.cursor='grabbing';hideCH();
+  });
+  svg.addEventListener('pointermove',e=>{
+    if(dragSt){
+      const rect=svg.getBoundingClientRect();
+      const dx=(dragSt.x-e.clientX)/rect.width*(w/scale);
+      panX=dragSt.panX+dx;clampPan();apply();
+    } else {isDragging=false;updateCH(e);}
+  });
+  const endDrag=()=>{isDragging=false;dragSt=null;svg.style.cursor='crosshair';};
+  svg.addEventListener('pointerup',endDrag);
+  svg.addEventListener('pointercancel',endDrag);
+  svg.addEventListener('pointerleave',()=>{endDrag();hideCH();});
+
+  // ── 더블클릭 리셋 ─────────────────────────────────────────────────────────
+  svg.addEventListener('dblclick',()=>{scale=1;panX=0;apply();});
 }
 
 // ─── Chart Generation (Plotly + 서브플롯) ───────────────────────────────────
