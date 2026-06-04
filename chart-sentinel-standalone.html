@@ -756,13 +756,13 @@ function buildCandleChart(candles, ticker='', w=960, ch=290, vh=65, rh=58) {
     const fy=toY(fH-r*fR).toFixed(1);
     return `<line x1="0" y1="${fy}" x2="${w+barW*EXTRA}" y2="${fy}" stroke="${FC[i]}" stroke-width="0.9" stroke-dasharray="5,4" vector-effect="non-scaling-stroke" opacity="0.65"/>`;
   }).join(''):'';
-  // Fib inline price labels (right edge, JS updates Y on zoom)
+  // Fib inline price labels (left side after MA legend, JS updates Y on zoom)
   const fibInline=fR>0?FR.map((r,i)=>{
     const fp=fH-r*fR, fy=toY(fp);
     const txt=fp>=1?fp.toFixed(2):fp.toPrecision(4);
-    const lw=txt.length*6+10, lx=w-lw-4;
-    return `<rect id="cs-fb${i}" data-fp="${fp}" x="${lx.toFixed(1)}" y="${(fy-7).toFixed(1)}" width="${lw}" height="13" fill="#0b0e14" opacity="0.88" rx="2" stroke="${FC[i]}" stroke-width="0.7"/>` +
-           `<text id="cs-ft${i}" data-fp="${fp}" x="${(lx+lw/2).toFixed(1)}" y="${(fy+3).toFixed(1)}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace" text-anchor="middle">${txt}</text>`;
+    const lw=txt.length*6+10, lx=120;
+    return `<rect id="cs-fb${i}" data-fp="${fp}" x="${lx}" y="${(fy-7).toFixed(1)}" width="${lw}" height="13" fill="#0b0e14" opacity="0.88" rx="2" stroke="${FC[i]}" stroke-width="0.7"/>` +
+           `<text id="cs-ft${i}" data-fp="${fp}" x="${lx+lw/2}" y="${(fy+3).toFixed(1)}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace" text-anchor="middle">${txt}</text>`;
   }).join(''):'';
 
   // RSI panel
@@ -1186,19 +1186,20 @@ async function callGemini(model, parts, userApiKey) {
 async function callGeminiVision(imageB64, mediaType, apiKey) {
   return callGemini(GEMINI_VISION_MODEL, [
     {inline_data: {mime_type: mediaType||'image/png', data: imageB64}},
-    {text: `당신은 전문 기술적 분석가입니다. 이 차트를 다음 항목별로 상세히 분석하세요:
+    {text: `당신은 전문 기술적 분석가입니다. 이 차트를 항목별로 심층 분석하세요.
+각 항목에서 수치나 상태만 나열하지 말고, 반드시 "그것이 지금 매매에 어떤 의미인지" 해석하여 서술하세요.
 
-1. **추세 분석**: 단기(1주)/중기(1개월)/장기(3개월) 추세 방향과 강도
-2. **이동평균선(MA)**: MA7/MA20/MA60/MA200 배열 상태, 골든크로스/데드크로스 발생 여부, 지지/저항 역할
-3. **볼린저밴드**: 현재 밴드 위치(상단/중간/하단), 밴드폭 수축(스퀴즈)/팽창 여부, 돌파 신호
-4. **거래량**: 최근 거래량 추세(증가/감소), 가격-거래량 다이버전스, 거래량 급증 구간
-5. **RSI**: 현재 RSI 수준(과매수70↑/과매도30↓/중립), 다이버전스 여부
-6. **엘리엇 파동**: 현재 파동 단계 추정 (충격파/조정파, 몇 번째 파동인지)
-7. **주요 지지/저항**: 가격 기준 핵심 지지선과 저항선
-8. **캔들 패턴**: 최근 주목할 캔들 패턴 (망치형, 도지, 삼병, 잉걸핀 등)
-9. **종합 판단**: 매수/매도/홀드 신호, 확률 추정, 진입 시 주의사항
+1. **추세 분석**: 단기(1주)/중기(1개월)/장기(3개월) 추세 방향과 강도. 현재 추세가 지속될 가능성과 반전 조건.
+2. **이동평균선(MA)**: 배열 상태와 골든/데드크로스 여부. 이 배열이 지금 강세/약세 중 어느 쪽을 지지하는지, 어느 MA가 핵심 지지·저항 역할을 하는지 해석.
+3. **볼린저밴드**: 현재 밴드 위치. 밴드폭 수축이면 대형 이동이 임박했다는 의미인지, 팽창이면 현재 추세가 강하다는 신호인지 해석.
+4. **거래량**: 최근 거래량 추세와 가격과의 관계. 거래량이 추세를 확인(컨펌)하는지 혹은 부정(다이버전스)하는지 해석.
+5. **RSI**: 현재 수준과 과매수/과매도 판단. 이 RSI 수준이 반등/추가 하락 중 어느 쪽을 시사하는지, 다이버전스가 있다면 무엇을 의미하는지 해석.
+6. **엘리엇 파동**: 현재 파동 단계 추정. 이 단계에서 다음 움직임으로 무엇을 예상할 수 있는지.
+7. **주요 지지/저항**: 핵심 가격대. 이 수준이 왜 중요한지 (이전 고점/저점, 심리적 지지 등) 이유 설명.
+8. **캔들 패턴**: 최근 주목할 패턴과 그것이 단기적으로 무엇을 암시하는지.
+9. **종합 판단**: 지금 매수/매도/관망해야 하는 이유. 진입 조건과 무효화(손절) 조건 명시.
 
-한국어로 항목별 명확하게 답변하세요.`},
+한국어로 각 항목을 구체적으로 해석하여 답변하세요.`},
   ], apiKey);
 }
 
@@ -1238,6 +1239,8 @@ ${fibExts.map(f => `Ext ${f.level}: $${fmt(f.price)} (${fmtPct(f.pct)})`).join('
 
   const prompt = `당신은 전문 퀀트 애널리스트입니다. 아래 기술적 분석 내용을 바탕으로 투자 리포트 JSON을 작성하세요.
 
+중요 원칙: 모든 필드에서 단순한 수치 나열이나 상태 묘사에 그치지 말고, 그것이 투자 결정에 어떤 의미인지 반드시 해석하여 서술하세요. 투자자가 읽고 즉시 행동 방향을 알 수 있어야 합니다.
+
 종목: ${ticker}  |  현재가: ${price ? '$'+price.toLocaleString() : '미확인'}
 ${computedCtx}
 기술적 분석 내용:
@@ -1249,21 +1252,21 @@ ${visionText}
   "price": ${price || null},
   "position": "long 또는 short 또는 hold 또는 none",
   "confidence": 0~100 사이 숫자,
-  "summary": "핵심 요약 2~3문장 (마크다운 기호 없이 평문으로)",
-  "trend": "단기/중기/장기 추세 평문 설명",
-  "ma_status": "이동평균선 배열 상태 평문",
-  "volume_analysis": "거래량 분석 평문",
-  "elliott_wave": "엘리엇 파동 단계 추정 평문",
-  "bollinger": "볼린저밴드 현황 평문",
-  "rsi_signal": "RSI 수준과 신호 평문",
-  "technical": "종합 기술적 분석 평문",
+  "summary": "현재 상황의 핵심 해석 3~5문장. 지금 시장이 어떤 상태이며 왜 그런지, 이 상황이 투자자에게 무엇을 의미하는지, 지금 당장 무엇을 해야 하는지를 명확하게 서술. 마크다운 기호 없이 평문으로.",
+  "trend": "단기/중기/장기 추세 방향과 각 시간대 추세가 서로 일치하는지 충돌하는지, 이것이 현재 매매 타이밍에 어떤 의미인지 해석.",
+  "ma_status": "이동평균선 배열이 강세인지 약세인지, 어느 MA가 현재 핵심 지지·저항인지, 가격이 이 배열에서 이탈한다면 어떤 상황이 펼쳐질지 해석.",
+  "volume_analysis": "거래량이 현재 추세를 확인(컨펌)하는지 부정(다이버전스)하는지, 그 의미가 매매 신호로서 무엇을 시사하는지 해석.",
+  "elliott_wave": "현재 파동 단계와 이 단계에서 다음 움직임으로 무엇이 예상되는지, 파동 관점에서 지금이 진입 적기인지 관망해야 하는 구간인지 해석.",
+  "bollinger": "볼린저밴드 위치와 밴드폭 상태가 향후 변동성과 방향성에 대해 무엇을 말하는지 해석.",
+  "rsi_signal": "현재 RSI 수준이 과매수/과매도 여부, 이 수준에서 반등/추가하락 중 어느 쪽 확률이 높은지, 다이버전스가 있다면 반전 가능성 해석.",
+  "technical": "모든 지표를 종합했을 때 현재 가장 강력한 매매 근거는 무엇이고, 가장 큰 리스크 요인은 무엇인지, 시나리오별(상승/하락) 핵심 조건 해석.",
   "support": 핵심 지지가 숫자 또는 null,
   "resistance": 핵심 저항가 숫자 또는 null,
   "target_price": 목표가 숫자 또는 null,
   "stop_loss": 손절가 숫자 또는 null,
   "risk_level": "low 또는 medium 또는 high",
-  "signals": ["신호문장1", "신호문장2", "신호문장3"],
-  "recommendation": "투자 의견 평문 (마크다운 기호 없이)"
+  "signals": ["지금 가장 중요한 매매 신호 3~4개. 각각 이유 포함한 문장으로"],
+  "recommendation": "지금 투자자가 취해야 할 구체적 행동과 그 이유. 진입 조건, 손절 조건, 목표 수익 관리 방법 포함. 마크다운 기호 없이 평문으로."
 }`;
   const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey);
   try {
