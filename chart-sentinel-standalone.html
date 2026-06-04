@@ -1727,22 +1727,52 @@ function TradePlanSection({computed, report}) {
 
 function ReportCard({report, onSave}) {
   if(!report) return null;
-  const badgeClass = report.position==='long'?'badge-green':report.position==='short'?'badge-red':'badge-yellow';
+  const pos = report.position || 'hold';
+  const badgeClass = pos==='long'?'badge-green':pos==='short'?'badge-red':'badge-yellow';
+  const posColor   = pos==='long'?'#34d399':pos==='short'?'#f87171':'#fbbf24';
+  const posLabel   = pos==='long'?'LONG ▲':pos==='short'?'SHORT ▼':pos.toUpperCase();
+  const curPrice   = report.price ? Number(report.price) : null;
   const fmtPrice = v => v ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:4})}` : null;
+  // Show % distance from current price and direction arrow
+  const PriceTag = ({val, label, color}) => {
+    if (!val) return null;
+    const n = Number(val);
+    const pct = curPrice ? ((n - curPrice) / curPrice * 100) : null;
+    const dir = pct == null ? '' : pct >= 0 ? `▲ +${pct.toFixed(1)}%` : `▼ ${pct.toFixed(1)}%`;
+    const dirColor = pct == null ? '#64748b' : pct >= 0 ? '#4ade80' : '#f87171';
+    return (
+      <div className="stat-card" style={{flex:1,minWidth:90}}>
+        <div style={{color,fontSize:'1.05rem',fontWeight:700}}>{fmtPrice(val)}</div>
+        {pct != null && <div style={{color:dirColor,fontSize:'.75rem',fontWeight:700,marginTop:2}}>{dir}</div>}
+        <div className="stat-label">{label}</div>
+      </div>
+    );
+  };
   return (
     <div className="card">
-      {/* 헤더 */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <span style={{fontSize:'1.2rem',fontWeight:700,color:'#60a5fa'}}>{report.ticker}</span>
-          {report.price && <span style={{color:'#94a3b8',fontSize:'.95rem'}}>${Number(report.price).toLocaleString(undefined,{maximumFractionDigits:4})}</span>}
+      {/* ── 히어로 헤더: 종목 + 현재가 크게 표시 ── */}
+      <div style={{background:'linear-gradient(135deg,#0f172a,#1a2540)',border:'1px solid #334155',borderRadius:10,padding:'16px 20px',marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+        <div>
+          <div style={{fontSize:'.78rem',color:'#475569',fontWeight:600,letterSpacing:'0.08em',marginBottom:2}}>종목</div>
+          <div style={{fontSize:'1.6rem',fontWeight:800,color:'#60a5fa',letterSpacing:'0.03em'}}>{(report.ticker||'').toUpperCase()}</div>
         </div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <span className={`badge ${badgeClass}`} style={{fontSize:'1rem',padding:'4px 14px'}}>
-            {(report.position||'hold').toUpperCase()}
-          </span>
-          <span className="badge badge-blue">신뢰도 {report.confidence||50}%</span>
-          {onSave && <button className="btn-secondary" style={{padding:'4px 12px',fontSize:'.8rem'}} onClick={()=>onSave(report)}>저장</button>}
+        <div style={{textAlign:'center'}}>
+          <div style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginBottom:2}}>현재가</div>
+          <div style={{fontSize:'1.9rem',fontWeight:800,color:'#e2e8f0',fontFamily:'monospace'}}>
+            {curPrice ? `$${curPrice.toLocaleString(undefined,{maximumFractionDigits:4})}` : '—'}
+          </div>
+        </div>
+        <div style={{textAlign:'right',display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+          <div style={{fontSize:'1.1rem',fontWeight:800,color:posColor,background:posColor+'22',padding:'5px 16px',borderRadius:8,border:`1px solid ${posColor}55`}}>{posLabel}</div>
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <span className="badge badge-blue">신뢰도 {report.confidence||50}%</span>
+            {report.risk_level && (
+              <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`}>
+                리스크 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
+              </span>
+            )}
+            {onSave && <button className="btn-secondary" style={{padding:'3px 10px',fontSize:'.78rem'}} onClick={()=>onSave(report)}>저장</button>}
+          </div>
         </div>
       </div>
 
@@ -1759,17 +1789,17 @@ function ReportCard({report, onSave}) {
 
       {/* 요약 */}
       {report.summary && (
-        <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12,lineHeight:1.7,fontSize:'.9rem'}}>
+        <div style={{background:'#0f172a',border:'1px solid #1e3a5f',borderLeft:'3px solid #3b82f6',borderRadius:8,padding:'14px 16px',marginBottom:14,lineHeight:1.8,fontSize:'.92rem',color:'#cbd5e1'}}>
           {report.summary}
         </div>
       )}
 
-      {/* 핵심 지표 수치 */}
+      {/* 핵심 지표 수치 — 현재가 대비 방향 표시 */}
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
-        {report.support      && <div className="stat-card" style={{flex:1,minWidth:80}}><div className="stat-value" style={{color:'#34d399',fontSize:'1.1rem'}}>{fmtPrice(report.support)}</div><div className="stat-label">지지선</div></div>}
-        {report.resistance   && <div className="stat-card" style={{flex:1,minWidth:80}}><div className="stat-value" style={{color:'#f87171',fontSize:'1.1rem'}}>{fmtPrice(report.resistance)}</div><div className="stat-label">저항선</div></div>}
-        {report.target_price && <div className="stat-card" style={{flex:1,minWidth:80}}><div className="stat-value" style={{color:'#a78bfa',fontSize:'1.1rem'}}>{fmtPrice(report.target_price)}</div><div className="stat-label">목표가</div></div>}
-        {report.stop_loss    && <div className="stat-card" style={{flex:1,minWidth:80}}><div className="stat-value" style={{color:'#f87171',fontSize:'1.1rem'}}>{fmtPrice(report.stop_loss)}</div><div className="stat-label">손절가</div></div>}
+        <PriceTag val={report.support}      label="지지선"  color="#34d399"/>
+        <PriceTag val={report.resistance}   label="저항선"  color="#f87171"/>
+        <PriceTag val={report.target_price} label="목표가"  color="#a78bfa"/>
+        <PriceTag val={report.stop_loss}    label="손절가"  color="#fb923c"/>
       </div>
 
       {/* 시그널 태그 */}
@@ -1799,15 +1829,6 @@ function ReportCard({report, onSave}) {
         <InfoRow label="🔬 종합 기술분석" value={report.technical}/>
         <InfoRow label="💡 투자의견"      value={report.recommendation} color="#fbbf24"/>
       </div>
-
-      {/* 리스크 */}
-      {report.risk_level && (
-        <div style={{marginTop:8}}>
-          <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`}>
-            리스크: {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
-          </span>
-        </div>
-      )}
 
       {/* Vision 원문 펼치기 */}
       {report.visionText && (
