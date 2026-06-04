@@ -255,6 +255,25 @@ const KR_TICKER_MAP = {
   'HMM':'011200.KS','현대머스크':'011200.KS',
 };
 
+async function searchKrTicker(name) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(name)}&lang=ko&region=KR&quotesCount=5&newsCount=0&enableFuzzyQuery=true`;
+  for (const mkp of [
+    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+  ]) {
+    try {
+      const r = await fetch(mkp(url), {signal: AbortSignal.timeout(5000)});
+      if (!r.ok) continue;
+      const raw = await r.json();
+      const d = raw?.contents ? JSON.parse(raw.contents) : raw;
+      const quotes = d?.quotes || [];
+      const kr = quotes.find(q => /\.(KS|KQ)$/.test(q.symbol));
+      if (kr) return kr.symbol;
+    } catch {}
+  }
+  return null;
+}
+
 const CRYPTO_MAP = {
   'bitcoin':'bitcoin','btc':'bitcoin','비트코인':'bitcoin',
   'ethereum':'ethereum','eth':'ethereum','이더리움':'ethereum',
@@ -1764,6 +1783,14 @@ async function analyzeFull(query, apiKey, onStep, mode='auto') {
     ({ticker, type} = resolveTicker(query, mode));
   }
 
+  // Korean name → try to resolve ticker dynamically
+  if (type === 'stock' && /[가-힣]/.test(ticker) && !ticker.includes('.')) {
+    try {
+      const found = await searchKrTicker(ticker);
+      if (found) ticker = found;
+    } catch {}
+  }
+
   step('data');
   let ohlcv, price;
   try {
@@ -2535,8 +2562,52 @@ function ImageDropzone({onImage}) {
   );
 }
 
-function TradingViewWidget({ticker}) {
+function toTvSymbol(ticker, query='') {
+  if (!ticker) return 'BTCUSD';
+  const low = ticker.toLowerCase();
+  const q = (query||'').toLowerCase().trim();
+
+  // Korean stocks (.KS / .KQ)
+  if (/\.(ks|kq)$/i.test(ticker)) {
+    return 'KRX:' + ticker.replace(/\.(ks|kq)$/i, '').toUpperCase();
+  }
+
+  // Direct Binance symbol from BINANCE_SYMBOL_MAP (by ticker or original query)
+  if (BINANCE_SYMBOL_MAP[low]) return 'BINANCE:' + BINANCE_SYMBOL_MAP[low];
+  if (q && BINANCE_SYMBOL_MAP[q]) return 'BINANCE:' + BINANCE_SYMBOL_MAP[q];
+
+  // CoinGecko ID → find matching Binance symbol via reverse CRYPTO_MAP lookup
+  const cgToBinance = {
+    'bitcoin':'BTCUSDT','ethereum':'ETHUSDT','solana':'SOLUSDT','ripple':'XRPUSDT',
+    'binancecoin':'BNBUSDT','dogecoin':'DOGEUSDT','cardano':'ADAUSDT',
+    'avalanche-2':'AVAXUSDT','matic-network':'MATICUSDT','chainlink':'LINKUSDT',
+    'polkadot':'DOTUSDT','cosmos':'ATOMUSDT','litecoin':'LTCUSDT','tron':'TRXUSDT',
+    'shiba-inu':'SHIBUSDT','near':'NEARUSDT','aptos':'APTUSDT','sui':'SUIUSDT',
+    'arbitrum':'ARBUSDT','optimism':'OPUSDT','the-open-network':'TONUSDT',
+    'internet-computer':'ICPUSDT','stellar':'XLMUSDT','uniswap':'UNIUSDT',
+    'hyperliquid':'HYPEUSDT','pudgy-penguins':'PENGUUSDT','movement':'MOVEUSDT',
+    'official-trump':'TRUMPUSDT','pepe':'PEPEUSDT','bonk':'BONKUSDT',
+    'dogwifcoin':'WIFUSDT','kaspa':'KASUSDT','render-token':'RENDERUSDT',
+    'the-sandbox':'SANDUSDT','decentraland':'MANAUSDT','axie-infinity':'AXSUSDT',
+    'starknet':'STRKUSDT','celestia':'TIAUSDT','ethena':'ENAUSDT',
+    'injective':'INJUSDT','sei-network':'SEIUSDT','fetch-ai':'FETUSDT',
+    'worldcoin-wld':'WLDUSDT','jupiter-exchange-solana':'JUPUSDT',
+    'pyth-network':'PYTHUSDT','notcoin':'NOTUSDT','floki-inu':'FLOKIUSDT',
+    'berachain-bera':'BERAUSDT','sonic-3':'SUSDT','zksync':'ZKUSDT',
+    'usual':'USUALUSDT','kaito':'KAITOUSDT',
+  };
+  if (cgToBinance[low]) return 'BINANCE:' + cgToBinance[low];
+
+  // If ticker ends with USDT it's already an exchange symbol
+  if (/USDT$/i.test(ticker)) return 'BINANCE:' + ticker.toUpperCase();
+
+  // US stocks - TradingView resolves automatically
+  return ticker.toUpperCase();
+}
+
+function TradingViewWidget({ticker, query=''}) {
   const ref = useRef();
+  const tvSym = toTvSymbol(ticker, query);
   useEffect(()=>{
     if(!ref.current) return;
     ref.current.innerHTML='';
@@ -2545,13 +2616,13 @@ function TradingViewWidget({ticker}) {
     script.async = true;
     script.innerHTML = JSON.stringify({
       autosize:true,
-      symbol: ticker.includes('.')?`KRX:${ticker.replace('.KS','')}`:ticker.includes('-')?`BINANCE:${ticker.toUpperCase()}USDT`:ticker,
+      symbol: tvSym,
       interval:'D', timezone:'Asia/Seoul', theme:'dark',
       style:'1', locale:'kr', enable_publishing:false,
       allow_symbol_change:true, calendar:false,
     });
     ref.current.appendChild(script);
-  },[ticker]);
+  },[tvSym]);
   return <div className="tv-widget" ref={ref}/>;
 }
 
@@ -2780,7 +2851,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
           {report.ticker && (
             <div className="card" style={{padding:'12px 16px'}}>
               <div className="card-title" style={{marginBottom:8}}>📺 TradingView</div>
-              <TradingViewWidget ticker={report.ticker}/>
+              <TradingViewWidget ticker={report.ticker} query={report._query||query}/>
             </div>
           )}
           <AnalysisSection report={report}/>
