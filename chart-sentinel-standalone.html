@@ -1448,7 +1448,7 @@ async function callGeminiVision(imageB64, mediaType, apiKey, timeframeLabel='일
 8. **캔들 패턴**: 최근 주목할 패턴과 그것이 단기적으로 무엇을 암시하는지.
 9. **종합 판단**: 지금 매수/매도/관망해야 하는 이유. 진입 조건과 무효화(손절) 조건 명시.
 
-한국어로 각 항목을 구체적으로 해석하여 답변하세요.`},
+반드시 한국어로만 각 항목을 구체적으로 해석하여 답변하세요. 영어 사용 금지.`},
   ], apiKey);
 }
 
@@ -1488,6 +1488,8 @@ ${fibExts.map(f => `Ext ${f.level}: $${fmt(f.price)} (${fmtPct(f.pct)})`).join('
 
   const prompt = `당신은 전문 퀀트 애널리스트입니다. 아래 기술적 분석 내용을 바탕으로 투자 리포트 JSON을 작성하세요.
 
+⚠️ 언어 규칙: 모든 텍스트 필드 값은 반드시 한국어로만 작성하세요. 영어 혼용 금지.
+
 중요 원칙: 모든 필드에서 단순한 수치 나열이나 상태 묘사에 그치지 말고, 그것이 투자 결정에 어떤 의미인지 반드시 해석하여 서술하세요. 투자자가 읽고 즉시 행동 방향을 알 수 있어야 합니다.
 
 종목: ${ticker}  |  현재가: ${price ? '$'+price.toLocaleString() : '미확인'}
@@ -1514,7 +1516,9 @@ ${visionText}
   "target_price": 목표가 숫자 또는 null,
   "stop_loss": 손절가 숫자 또는 null,
   "risk_level": "low 또는 medium 또는 high",
-  "signals": ["지금 가장 중요한 매매 신호 3~4개. 각각 이유 포함한 문장으로"],
+  "signals": ["지금 가장 중요한 매매 신호 3~4개. 각각 이유 포함한 간결한 한국어 문구(10자 이내 권장, 예: '강력 매수 신호', 'MA50 상향 돌파', 'RSI 과매도 반등')"],
+  "time_horizon": "단기(1~2주) 또는 중기(1~3개월) 또는 장기(3개월 이상)",
+  "setup_type": "스윙 트레이드 또는 데이 트레이드 또는 장기 투자",
   "recommendation": "지금 투자자가 취해야 할 구체적 행동과 그 이유. 진입 조건, 손절 조건, 목표 수익 관리 방법 포함. 마크다운 기호 없이 평문으로."
 }`;
   const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey);
@@ -1964,32 +1968,58 @@ function FibSection({computed}) {
 function TradePlanSection({computed, report}) {
   if (!computed?.tradePlan) return null;
   const {tradePlan} = computed;
-  const pos = report?.position;
+  const entryRef = tradePlan.entry1 || report?.price;
+  const pct = (val, ref) => (ref && val) ? ((val-ref)/ref*100) : null;
 
-  const Row = ({label, val, color, note}) => (
-    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #1e293b',fontSize:'.83rem'}}>
-      <span style={{color:'#94a3b8',minWidth:90}}>{label}</span>
-      <span style={{color: color||'#e2e8f0',fontWeight:700,fontVariantNumeric:'tabular-nums'}}>${fp(val)}</span>
-      {note && <span style={{color:'#64748b',fontSize:'.75rem'}}>{note}</span>}
-    </div>
-  );
+  const rows = [
+    {icon:'⊙', label:'진입가',   val: entryRef,          color:'#34d399', rr: null,          p: 0,                             isEntry:true},
+    {icon:'✓', label:'익절 1차', val: tradePlan.profit1, color:'#4ade80', rr: tradePlan.rr1, p: pct(tradePlan.profit1,entryRef)},
+    {icon:'✓', label:'익절 2차', val: tradePlan.profit2, color:'#4ade80', rr: tradePlan.rr2, p: pct(tradePlan.profit2,entryRef)},
+    {icon:'✓', label:'익절 3차', val: tradePlan.profit3, color:'#4ade80', rr: tradePlan.rr3, p: pct(tradePlan.profit3,entryRef)},
+    {icon:'⊘', label:'손절',     val: tradePlan.stopLoss,color:'#f87171', rr: null,          p: pct(tradePlan.stopLoss,entryRef)},
+  ].filter(r=>r.val!=null);
+
+  const thStyle = {padding:'9px 12px',textAlign:'left',fontSize:'.68rem',fontWeight:700,color:'#475569',letterSpacing:'0.1em',whiteSpace:'nowrap'};
+  const thR = {...thStyle,textAlign:'right'};
 
   return (
-    <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
-      <div style={{fontSize:'.8rem',fontWeight:700,color:'#fbbf24',marginBottom:10}}>📋 매매 플랜</div>
-
-      <Row label="1차 진입"  val={tradePlan.entry1}   color="#34d399" note="Fib 0.236"/>
-      <Row label="2차 진입"  val={tradePlan.entry2}   color="#34d399" note="Fib 0.382"/>
-      <Row label="손절"      val={tradePlan.stopLoss} color="#f87171" note="90일 저점 -3%"/>
-      <Row label="익절 1차"  val={tradePlan.profit1}  color="#a78bfa"
-        note={`Ext 1.272 · RR ${tradePlan.rr1 != null ? tradePlan.rr1.toFixed(1)+'x' : '—'} · 40% 청산`}/>
-      <Row label="익절 2차"  val={tradePlan.profit2}  color="#a78bfa"
-        note={`Ext 1.618 · RR ${tradePlan.rr2 != null ? tradePlan.rr2.toFixed(1)+'x' : '—'} · 35% 청산`}/>
-      <Row label="익절 3차"  val={tradePlan.profit3}  color="#a78bfa"
-        note={`Ext 2.618 · RR ${tradePlan.rr3 != null ? tradePlan.rr3.toFixed(1)+'x' : '—'} · 25% 청산`}/>
-
-      <div style={{marginTop:8,fontSize:'.78rem',color:'#64748b',lineHeight:1.6}}>
-        ⚠️ 진입 트리거: 거래량 &gt; 14일 평균×1.5 · 일봉 양봉 마감 · RSI 30↑반등 확인 후 진입
+    <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead>
+          <tr style={{background:'#0f172a',borderBottom:'1px solid #1e293b'}}>
+            <th style={thStyle}>레벨</th>
+            <th style={thR}>가격</th>
+            <th style={thR}>리스크/리워드</th>
+            <th style={thR}>수익률</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row,i)=>{
+            const pctVal = row.isEntry ? null : row.p;
+            return (
+              <tr key={i} style={{borderBottom:'1px solid #0f172a',background: i%2===0 ? '#0a0f1a':'#0d1424'}}>
+                <td style={{padding:'10px 12px'}}>
+                  <span style={{color:row.color,fontWeight:700,fontSize:'.88rem',marginRight:6}}>{row.icon}</span>
+                  <span style={{color: row.isEntry ? '#94a3b8' : row.color, fontWeight: row.isEntry?600:700, fontSize:'.85rem'}}>{row.label}</span>
+                </td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',fontWeight:700,color:'#e2e8f0',fontSize:'.9rem'}}>
+                  ${fp(row.val)}
+                </td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontSize:'.82rem',color:'#64748b'}}>
+                  {row.rr!=null ? <span style={{color:'#94a3b8'}}>{row.rr.toFixed(2)} RR</span> : '—'}
+                </td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontSize:'.88rem',
+                  color: pctVal==null?'#64748b':pctVal>=0?'#4ade80':'#f87171'}}>
+                  {pctVal!=null?(pctVal>=0?`+${pctVal.toFixed(2)}%`:`${pctVal.toFixed(2)}%`):'—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{padding:'8px 12px',background:'#080d18',borderTop:'1px solid #1e293b',display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:6,fontSize:'.74rem',color:'#475569'}}>
+        <span>⚠️ 거래 리스크: 계좌의 1%  ·  진입조건: 거래량↑ &amp; 일봉 양봉 마감</span>
+        <span>설정 유형: <span style={{color:'#60a5fa',fontWeight:700}}>{report?.setup_type||'스윙 트레이드'}</span></span>
       </div>
     </div>
   );
@@ -1998,38 +2028,78 @@ function TradePlanSection({computed, report}) {
 function ReportHero({report, onSave}) {
   if(!report) return null;
   const pos = report.position || 'hold';
-  const posColor = pos==='long'?'#34d399':pos==='short'?'#f87171':'#fbbf24';
-  const posLabel = pos==='long'?'LONG ▲':pos==='short'?'SHORT ▼':pos.toUpperCase();
+  const posColor = pos==='long'?'#22c55e':pos==='short'?'#ef4444':'#f59e0b';
+  const posBg   = pos==='long'?'#052e16':pos==='short'?'#450a0a':'#451a03';
+  const posBorder= pos==='long'?'#166534':pos==='short'?'#7f1d1d':'#92400e';
+  const posIcon  = pos==='long'?'↗':pos==='short'?'↙':'→';
+  const posLabel = pos==='long'?'LONG':pos==='short'?'SHORT':'HOLD';
+  const posSub   = pos==='long'?'상승 포지션':pos==='short'?'하락 포지션':'관망';
   const curPrice = report.price ? Number(report.price) : null;
-  const conf = report.confidence || 50;
+  const conf = Math.min(100, Math.max(0, report.confidence || 50));
+  const ticker = (report.ticker||'').toUpperCase();
+  const letter = ticker[0] || '?';
+  // SVG confidence donut
+  const R = 28, circ = 2*Math.PI*R, dash = circ*(1-conf/100);
+  const signalPalette = [
+    {bg:'#052e16',border:'#166534',color:'#4ade80'},
+    {bg:'#052e16',border:'#166534',color:'#4ade80'},
+    {bg:'#052e16',border:'#166534',color:'#4ade80'},
+    {bg:'#450a0a',border:'#7f1d1d',color:'#f87171'},
+    {bg:'#1e1b4b',border:'#3730a3',color:'#a78bfa'},
+  ];
   return (
-    <div className="card" style={{background:'linear-gradient(135deg,#0f172a,#1a2540)',border:'1px solid #334155',padding:'18px 20px'}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-        {/* Left: Ticker + Price */}
-        <div>
-          <div style={{fontSize:'.75rem',color:'#475569',fontWeight:600,letterSpacing:'0.08em',marginBottom:2}}>종목</div>
-          <div style={{fontSize:'1.7rem',fontWeight:800,color:'#60a5fa'}}>{(report.ticker||'').toUpperCase()}</div>
-          <div style={{fontSize:'1.5rem',fontWeight:700,color:'#e2e8f0',fontFamily:'monospace',marginTop:2}}>
-            {curPrice ? `$${curPrice.toLocaleString(undefined,{maximumFractionDigits:4})}` : '—'}
+    <div className="card" style={{padding:'20px 22px',background:'linear-gradient(135deg,#0f172a 70%,#131f35)'}}>
+      {/* ── top row ── */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:16,marginBottom:16}}>
+        {/* Left: avatar + name + price */}
+        <div style={{display:'flex',alignItems:'center',gap:14}}>
+          <div style={{width:52,height:52,borderRadius:'50%',background:'linear-gradient(135deg,#3b82f6,#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.35rem',fontWeight:900,color:'#fff',flexShrink:0,boxShadow:'0 0 0 3px #1e293b'}}>
+            {letter}
           </div>
-          <div style={{fontSize:'.75rem',color:'#475569',marginTop:2}}>현재가</div>
+          <div>
+            <div style={{fontSize:'1.75rem',fontWeight:900,color:'#f8fafc',lineHeight:1,letterSpacing:'-0.02em'}}>{ticker}</div>
+            <div style={{fontSize:'.82rem',color:'#64748b',marginTop:2}}>{report._noData?'AI 텍스트 분석':'기술적 분석 리포트'}</div>
+            <div style={{marginTop:5,display:'flex',alignItems:'baseline',gap:6}}>
+              <span style={{fontSize:'1.45rem',fontWeight:700,color:'#e2e8f0',fontFamily:'monospace',letterSpacing:'-0.01em'}}>
+                {curPrice?`$${curPrice.toLocaleString(undefined,{maximumFractionDigits:4})}`:'—'}
+              </span>
+            </div>
+          </div>
         </div>
-        {/* Right: Position + Confidence */}
-        <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}>
-          <div style={{fontSize:'1.2rem',fontWeight:800,color:posColor,background:posColor+'18',padding:'6px 20px',borderRadius:8,border:`1.5px solid ${posColor}55`}}>{posLabel}</div>
-          <div style={{display:'flex',alignItems:'center',gap:8}}>
-            <span className="badge badge-blue" style={{fontSize:'.85rem',padding:'4px 12px'}}>신뢰도 {conf}%</span>
-            {report.risk_level && <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`}>
-              리스크 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
-            </span>}
-            {onSave && <button className="btn-secondary" style={{padding:'3px 10px',fontSize:'.78rem'}} onClick={()=>onSave(report)}>저장</button>}
+        {/* Right: position badge + confidence donut */}
+        <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+          <div style={{background:posBg,border:`1.5px solid ${posBorder}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}>
+            <div style={{fontSize:'1.15rem',fontWeight:900,color:posColor,letterSpacing:'0.04em'}}>{posIcon} {posLabel}</div>
+            <div style={{fontSize:'.7rem',color:posColor+'99',marginTop:2}}>{posSub}</div>
           </div>
+          <div style={{position:'relative',width:74,height:74,flexShrink:0}}>
+            <svg width="74" height="74" style={{transform:'rotate(-90deg)',display:'block'}}>
+              <circle cx="37" cy="37" r={R} fill="none" stroke="#1e293b" strokeWidth="6"/>
+              <circle cx="37" cy="37" r={R} fill="none" stroke={posColor} strokeWidth="6"
+                strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>
+            </svg>
+            <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+              <span style={{fontSize:'1.05rem',fontWeight:800,color:'#f8fafc',lineHeight:1}}>{conf}%</span>
+              <span style={{fontSize:'.6rem',color:'#64748b',marginTop:1}}>신뢰도</span>
+            </div>
+          </div>
+          {report.risk_level && (
+            <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`} style={{fontSize:'.8rem'}}>
+              리스크 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
+            </span>
+          )}
         </div>
       </div>
-      {/* Signals */}
+      {/* ── key signals ── */}
       {report.signals?.length>0 && (
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
-          {report.signals.map((s,i)=><span key={i} className="badge badge-blue" style={{fontSize:'.8rem',padding:'4px 10px'}}>{s}</span>)}
+        <div>
+          <div style={{fontSize:'.7rem',fontWeight:700,color:'#334155',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {report.signals.map((s,i)=>{
+              const c=signalPalette[i%signalPalette.length];
+              return <span key={i} style={{background:c.bg,border:`1px solid ${c.border}`,color:c.color,borderRadius:20,padding:'4px 12px',fontSize:'.78rem',fontWeight:600}}>{s}</span>;
+            })}
+          </div>
         </div>
       )}
       {(report._dataError||report._noData) && (
@@ -2044,41 +2114,100 @@ function ReportHero({report, onSave}) {
 function AnalysisSection({report}) {
   if(!report) return null;
   const [open, setOpen] = React.useState(true);
+  const [techExpanded, setTechExpanded] = React.useState(false);
   const curPrice = report.price ? Number(report.price) : null;
-  const fmtPrice = v => v ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:4})}` : null;
-  const PriceTag = ({val, label, color}) => {
+  const fmtPrice = v => v!=null ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:4})}` : null;
+
+  // Price level card with % distance
+  const PriceTag = ({val, label, color, icon}) => {
     if(!val) return null;
     const n=Number(val), pct=curPrice?((n-curPrice)/curPrice*100):null;
-    const dir=pct==null?'':pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`;
     const dc=pct==null?'#64748b':pct>=0?'#4ade80':'#f87171';
     return (
-      <div className="stat-card" style={{flex:1,minWidth:90}}>
-        <div style={{color,fontSize:'1.05rem',fontWeight:700}}>{fmtPrice(val)}</div>
-        {pct!=null&&<div style={{color:dc,fontSize:'.75rem',fontWeight:700,marginTop:2}}>{dir}</div>}
-        <div className="stat-label">{label}</div>
+      <div style={{flex:'1 1 90px',minWidth:86,background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 10px',textAlign:'center'}}>
+        <div style={{fontSize:'.7rem',color:'#475569',fontWeight:600,marginBottom:4}}>{icon} {label}</div>
+        <div style={{fontSize:'1rem',fontWeight:800,color,fontFamily:'monospace'}}>{fmtPrice(val)}</div>
+        {pct!=null && <div style={{fontSize:'.72rem',fontWeight:700,color:dc,marginTop:3}}>{pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`}</div>}
       </div>
     );
   };
+
+  // Technical metric row for right panel
+  const computed = report.computed;
+  const ma = computed?.ma||{};
+  const bb = computed?.bb;
+  const rsi14 = computed?.rsi14;
+  const rsiColor = rsi14==null?'#94a3b8':rsi14>=70?'#f87171':rsi14<=30?'#4ade80':'#fbbf24';
+
+  const MetricRow = ({label, value, valueColor}) => (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #0f172a',fontSize:'.82rem'}}>
+      <span style={{color:'#64748b'}}>{label}</span>
+      <span style={{color:valueColor||'#e2e8f0',fontWeight:700}}>{value}</span>
+    </div>
+  );
+
+  // Trend label from report
+  const trendLabel = (report.trend||'').slice(0,20)||'—';
+  const trendColor = report.position==='long'?'#4ade80':report.position==='short'?'#f87171':'#fbbf24';
+
   return (
     <div className="card">
       <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>📐 분석</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+        <span>📊 기술적 분석</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
       </div>
-      {!open && null}
       {open && <>
-      {/* Key price levels */}
-      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
-        <PriceTag val={report.support}      label="지지선"  color="#34d399"/>
-        <PriceTag val={report.resistance}   label="저항선"  color="#f87171"/>
-        <PriceTag val={report.target_price} label="목표가"  color="#a78bfa"/>
-        <PriceTag val={report.stop_loss}    label="손절가"  color="#fb923c"/>
+
+      {/* ── Trade Plan (prominent) ── */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜</div>
+        <TradePlanSection computed={report.computed} report={report}/>
       </div>
-      {/* Computed indicators */}
-      <ComputedTechSection computed={report.computed}/>
-      {/* Fibonacci */}
+
+      {/* ── Key Price Levels ── */}
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+        <PriceTag val={report.support}      label="지지선"  color="#4ade80" icon="🟢"/>
+        <PriceTag val={report.resistance}   label="저항선"  color="#f87171" icon="🔴"/>
+        <PriceTag val={report.target_price} label="목표가"  color="#a78bfa" icon="🎯"/>
+        <PriceTag val={report.stop_loss}    label="손절가"  color="#fb923c" icon="⛔"/>
+      </div>
+
+      {/* ── Technical Analysis split layout ── */}
+      {(report.technical || computed) && (
+        <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+          <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>기술 지표</div>
+          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1.2fr) minmax(0,1fr)',gap:0}}>
+            {/* Left: Summary */}
+            <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
+              <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                <div style={{fontSize:'1.4rem',lineHeight:1}}>📈</div>
+                <div>
+                  <div style={{fontSize:'.72rem',fontWeight:700,color:'#60a5fa',letterSpacing:'0.08em',marginBottom:6}}>요약</div>
+                  <div style={{fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7}}>
+                    {techExpanded ? report.technical : (report.technical||'').slice(0,120)+(report.technical?.length>120?'…':'')}
+                  </div>
+                  {(report.technical||'').length>120 && (
+                    <button onClick={()=>setTechExpanded(v=>!v)} style={{marginTop:8,background:'none',border:'none',color:'#3b82f6',cursor:'pointer',fontSize:'.78rem',padding:0,fontWeight:600}}>
+                      {techExpanded?'접기 ▲':'전체 보기 ▼'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+            {/* Right: Metrics */}
+            <div style={{padding:'14px'}}>
+              {rsi14!=null && <MetricRow label="RSI(14)" value={rsi14.toFixed(1)} valueColor={rsiColor}/>}
+              {ma.ma50  && curPrice && <MetricRow label="MA50 대비" value={(((curPrice/ma.ma50)-1)*100).toFixed(2)+'%'} valueColor={curPrice>=ma.ma50?'#4ade80':'#f87171'}/>}
+              {ma.ma200 && curPrice && <MetricRow label="MA200 대비" value={(((curPrice/ma.ma200)-1)*100).toFixed(2)+'%'} valueColor={curPrice>=ma.ma200?'#4ade80':'#f87171'}/>}
+              {bb && <MetricRow label="볼린저밴드" value={curPrice>=bb.upper?'상단 돌파':curPrice<=bb.lower?'하단 이탈':'밴드 내부'} valueColor={curPrice>=bb.upper?'#f87171':curPrice<=bb.lower?'#4ade80':'#94a3b8'}/>}
+              <MetricRow label="추세" value={report.position==='long'?'강세 (상승)':report.position==='short'?'약세 (하락)':'중립'} valueColor={trendColor}/>
+              <MetricRow label="포지션 신뢰도" value={`${report.confidence||50}%`} valueColor="#a78bfa"/>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Fibonacci (collapsible) ── */}
       <FibSection computed={report.computed}/>
-      {/* Trade plan */}
-      <TradePlanSection computed={report.computed} report={report}/>
       </>}
     </div>
   );
@@ -2087,34 +2216,85 @@ function AnalysisSection({report}) {
 function ConclusionSection({report}) {
   if(!report) return null;
   const [open, setOpen] = React.useState(true);
+  const pos = report.position || 'hold';
+  const outlookColor = pos==='long'?'#4ade80':pos==='short'?'#f87171':'#fbbf24';
+  const outlookLabel = pos==='long'?'강세 (Bullish)':pos==='short'?'약세 (Bearish)':'중립 (Neutral)';
+
+  // Star conviction
+  const conf = Math.min(100, Math.max(0, report.confidence||50));
+  const stars = Math.round(conf/20); // 0-5
+  const StarRow = ({filled}) => (
+    <span style={{fontSize:'1rem',color:filled?'#fbbf24':'#334155'}}>★</span>
+  );
+
+  const OpinionRow = ({label, value, valueColor}) => (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
+      <span style={{color:'#64748b'}}>{label}</span>
+      <span style={{color:valueColor||'#e2e8f0',fontWeight:700}}>{value}</span>
+    </div>
+  );
+
   return (
     <div className="card">
       <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>💡 결론 및 AI 의견</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+        <span>💡 AI 투자 의견</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
       </div>
       {open && <>
-      {/* Summary */}
+
+      {/* ── Summary banner ── */}
       {report.summary && (
-        <div style={{background:'#0f172a',border:'1px solid #1e3a5f',borderLeft:'3px solid #3b82f6',borderRadius:8,padding:'14px 16px',marginBottom:14,lineHeight:1.8,fontSize:'.92rem',color:'#cbd5e1'}}>
+        <div style={{background:'#0a0f1a',borderLeft:'3px solid #3b82f6',borderRadius:'0 8px 8px 0',padding:'14px 16px',marginBottom:16,lineHeight:1.8,fontSize:'.9rem',color:'#cbd5e1'}}>
           {report.summary}
         </div>
       )}
-      {/* AI detail rows */}
-      <div>
-        <InfoRow label="📈 추세"         value={report.trend}/>
-        <InfoRow label="📊 이동평균선"    value={report.ma_status}/>
-        <InfoRow label="📉 볼린저밴드"    value={report.bollinger}/>
-        <InfoRow label="📦 거래량"        value={report.volume_analysis}/>
-        <InfoRow label="⚡ RSI"           value={report.rsi_signal}/>
-        <InfoRow label="🌊 엘리엇파동"    value={report.elliott_wave}/>
-        <InfoRow label="🔬 종합 기술분석" value={report.technical}/>
-        <InfoRow label="💡 투자의견"      value={report.recommendation} color="#fbbf24"/>
+
+      {/* ── Investment Opinion split layout ── */}
+      <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+        <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>투자 의견</div>
+        <div style={{display:'grid',gridTemplateColumns:'minmax(0,1.2fr) minmax(0,1fr)',gap:0}}>
+          {/* Left: OUR TAKE */}
+          <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
+            <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+              <div style={{fontSize:'1.4rem',lineHeight:1}}>🎯</div>
+              <div>
+                <div style={{fontSize:'.72rem',fontWeight:700,color:'#a78bfa',letterSpacing:'0.08em',marginBottom:6}}>종합 의견</div>
+                <div style={{fontSize:'.83rem',color:'#94a3b8',lineHeight:1.7}}>
+                  {(report.recommendation||report.summary||'분석 데이터 없음').slice(0,200)}
+                </div>
+              </div>
+            </div>
+          </div>
+          {/* Right: Opinion metrics */}
+          <div style={{padding:'14px'}}>
+            <OpinionRow label="시장 전망" value={outlookLabel} valueColor={outlookColor}/>
+            <OpinionRow label="투자 기간" value={report.time_horizon||'중기 (1~3개월)'} valueColor="#60a5fa"/>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
+              <span style={{color:'#64748b'}}>확신 강도</span>
+              <span>{[1,2,3,4,5].map(i=><StarRow key={i} filled={i<=stars}/>)}</span>
+            </div>
+            <OpinionRow label="적합 투자자" value={report.setup_type||'스윙 트레이더'} valueColor="#94a3b8"/>
+          </div>
+        </div>
       </div>
+
+      {/* ── Detail rows (collapsible) ── */}
+      <details style={{marginTop:4}}>
+        <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem',marginBottom:8,userSelect:'none'}}>▶ 상세 분석 항목 펼치기</summary>
+        <div style={{marginTop:8}}>
+          <InfoRow label="📈 추세"         value={report.trend}/>
+          <InfoRow label="📊 이동평균선"    value={report.ma_status}/>
+          <InfoRow label="📉 볼린저밴드"    value={report.bollinger}/>
+          <InfoRow label="📦 거래량"        value={report.volume_analysis}/>
+          <InfoRow label="⚡ RSI"           value={report.rsi_signal}/>
+          <InfoRow label="🌊 엘리엇파동"    value={report.elliott_wave}/>
+        </div>
+      </details>
+
       {/* Vision raw */}
       {report.visionText && (
-        <details style={{marginTop:12}}>
-          <summary style={{cursor:'pointer',color:'#64748b',fontSize:'.82rem'}}>▶ AI 차트 분석 원문 보기</summary>
-          <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginTop:8,fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7,whiteSpace:'pre-wrap'}}>{report.visionText}</div>
+        <details style={{marginTop:8}}>
+          <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem'}}>▶ AI 차트 분석 원문 보기</summary>
+          <div style={{background:'#0f172a',border:'1px solid #1e293b',borderRadius:8,padding:14,marginTop:8,fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7,whiteSpace:'pre-wrap'}}>{report.visionText}</div>
         </details>
       )}
       </>}
