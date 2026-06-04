@@ -808,10 +808,11 @@ ${currRSI!=null?`<text x="${w-4}" y="${rsiTop+12}" fill="${rsiCol}" font-size="1
 <text x="12" y="50" fill="#a78bfa" font-size="11" font-weight="700" font-family="monospace">━ MA99</text>
 <text x="12" y="65" fill="#ec4899" font-size="11" font-weight="800" font-family="monospace">━ VWMA100</text>`;
 
-  // Fib legend (top-right)
-  const fibBox=fR>0?`<rect x="${w-176}" y="4" width="172" height="84" fill="#0b0e14" opacity="0.88" rx="3" stroke="#243045" stroke-width="0.5"/>
-<text x="${w-168}" y="16" fill="#94a3b8" font-size="10" font-weight="700">Fib · 90봉 기준</text>
-${FR.map((r,i)=>{const fp=fH-r*fR,lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);return `<text x="${w-168}" y="${30+i*13}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace">Fib ${r}  ${lbl}</text>`;}).join('')}`:'';
+  // Fib legend (bottom-left)
+  const fbx=4, fby=ch-92;
+  const fibBox=fR>0?`<rect x="${fbx}" y="${fby}" width="172" height="84" fill="#0b0e14" opacity="0.88" rx="3" stroke="#243045" stroke-width="0.5"/>
+<text x="${fbx+8}" y="${fby+12}" fill="#94a3b8" font-size="10" font-weight="700">Fib · 90봉 기준</text>
+${FR.map((r,i)=>{const fp=fH-r*fR,lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);return `<text x="${fbx+8}" y="${fby+26+i*13}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace">Fib ${r}  ${lbl}</text>`;}).join('')}`:'';
 
   const divider=`<line x1="0" y1="${ch+6}" x2="${w}" y2="${ch+6}" stroke="#243045" stroke-width="0.5"/>`;
   const volLabel=`<text x="4" y="${ch+14}" fill="#94a3b8" font-size="10" font-weight="600">Vol</text>`;
@@ -1149,7 +1150,7 @@ async function callGemini(model, parts, userApiKey) {
   const body = {
     model,  // Worker에서 추출, Gemini URL에 사용
     contents: [{parts}],
-    generationConfig: {temperature: 0.7, maxOutputTokens: 2048},
+    generationConfig: {temperature: 0.7, maxOutputTokens: 8192},
   };
 
   let resp;
@@ -1270,9 +1271,28 @@ ${visionText}
 }`;
   const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey);
   try {
-    const m = text.match(/\{[\s\S]*\}/);
-    return m ? JSON.parse(m[0]) : {summary: text, position:'hold', confidence:50};
-  } catch { return {summary: text, position:'hold', confidence:50}; }
+    // Strip markdown code fences if present
+    const cleaned = text.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'').trim();
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (!m) return {summary: cleaned.slice(0, 400), position:'hold', confidence:50};
+    return JSON.parse(m[0]);
+  } catch(e) {
+    // If JSON is truncated try closing it
+    try {
+      const m2 = text.match(/\{[\s\S]*/);
+      if (m2) {
+        let partial = m2[0];
+        // Close any open string then object
+        if ((partial.match(/"/g)||[]).length % 2 !== 0) partial += '"';
+        partial += '}';
+        const r = JSON.parse(partial);
+        return r;
+      }
+    } catch {}
+    // Final fallback: extract summary from truncated text
+    const smry = text.replace(/^```(?:json)?\s*/,'').replace(/[{}"]/g,'').slice(0,500).trim();
+    return {summary: smry || '분석 데이터를 처리하는 중 오류가 발생했습니다.', position:'hold', confidence:50};
+  }
 }
 
 async function analyzeDirectly(query, apiKey) {
