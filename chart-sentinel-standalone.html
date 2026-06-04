@@ -188,7 +188,35 @@ const CRYPTO_MAP = {
   'dogecoin':'dogecoin','doge':'dogecoin','도지':'dogecoin',
   'cardano':'cardano','ada':'cardano',
   'avalanche':'avalanche-2','avax':'avalanche-2',
-  'polygon':'matic-network','matic':'matic-network',
+  'polygon':'matic-network','matic':'matic-network','pol':'matic-network',
+  'chainlink':'chainlink','link':'chainlink',
+  'polkadot':'polkadot','dot':'polkadot',
+  'cosmos':'cosmos','atom':'cosmos',
+  'litecoin':'litecoin','ltc':'litecoin',
+  'tron':'tron','trx':'tron',
+  'shiba-inu':'shiba-inu','shib':'shiba-inu','시바':'shiba-inu',
+  'near':'near','near-protocol':'near',
+  'aptos':'aptos','apt':'aptos',
+  'sui':'sui',
+  'arbitrum':'arbitrum','arb':'arbitrum',
+  'optimism':'optimism','op':'optimism',
+  'pepe':'pepe',
+  'bonk':'bonk',
+  'dogwifcoin':'dogwifcoin','wif':'dogwifcoin',
+  'the-open-network':'the-open-network','ton':'the-open-network',
+  'internet-computer':'internet-computer','icp':'internet-computer',
+  'stellar':'stellar','xlm':'stellar',
+  'uniswap':'uniswap','uni':'uniswap',
+  'aave':'aave',
+  'maker':'maker','mkr':'maker',
+  'filecoin':'filecoin','fil':'filecoin',
+  'hedera':'hedera','hbar':'hedera',
+  'injective':'injective','inj':'injective',
+  'sei-network':'sei-network','sei':'sei-network',
+  'render-token':'render-token','rndr':'render-token','render':'render-token',
+  'worldcoin-wld':'worldcoin-wld','wld':'worldcoin-wld',
+  'jupiter-exchange-solana':'jupiter-exchange-solana','jup':'jupiter-exchange-solana',
+  'pyth-network':'pyth-network','pyth':'pyth-network',
 };
 
 // ─── localStorage helpers ─────────────────────────────────────────────────────
@@ -340,15 +368,47 @@ function computeTechIndicators(ohlcv) {
 }
 
 // ─── Ticker Resolution ────────────────────────────────────────────────────────
-function resolveTicker(query) {
+// mode: 'auto' | 'stock' | 'crypto'
+function resolveTicker(query, mode='auto') {
   const q = query.trim().toLowerCase();
-  if(KR_TICKER_MAP[q]) return {ticker: KR_TICKER_MAP[q], type:'stock'};
-  if(CRYPTO_MAP[q]) return {ticker: CRYPTO_MAP[q], type:'crypto'};
+
+  if (mode === 'stock') {
+    if (KR_TICKER_MAP[q]) return {ticker: KR_TICKER_MAP[q], type:'stock'};
+    return {ticker: query.trim().toUpperCase(), type:'stock'};
+  }
+
+  if (mode === 'crypto') {
+    const id = CRYPTO_MAP[q] || q.replace(/\s+/g,'-').toLowerCase();
+    return {ticker: id, type:'crypto'};
+  }
+
+  // auto
+  if (KR_TICKER_MAP[q]) return {ticker: KR_TICKER_MAP[q], type:'stock'};
+  if (CRYPTO_MAP[q]) return {ticker: CRYPTO_MAP[q], type:'crypto'};
   const up = query.trim().toUpperCase();
-  // Detect crypto-like
-  const cryptoSuffixes = ['BTC','ETH','SOL','XRP','BNB','ADA','DOGE','AVAX','MATIC'];
-  if(cryptoSuffixes.includes(up)) return {ticker: CRYPTO_MAP[up.toLowerCase()]||up.toLowerCase(), type:'crypto'};
+  const cryptoSuffixes = ['BTC','ETH','SOL','XRP','BNB','ADA','DOGE','AVAX','MATIC','LINK','DOT','ATOM','LTC','TRX','SHIB','NEAR','APT','SUI','ARB','OP','TON','ICP','UNI','INJ','SEI'];
+  if (cryptoSuffixes.includes(up)) return {ticker: CRYPTO_MAP[up.toLowerCase()]||up.toLowerCase(), type:'crypto'};
   return {ticker: up, type:'stock'};
+}
+
+// CoinGecko 동적 검색 — CRYPTO_MAP에 없는 코인 ID를 서버에서 탐색
+const _coinIdCache = {};
+async function searchCoinId(query) {
+  const q = query.trim().toLowerCase();
+  if (CRYPTO_MAP[q]) return CRYPTO_MAP[q];
+  if (_coinIdCache[q]) return _coinIdCache[q];
+  try {
+    const url = `${CG_BASE}/search?query=${encodeURIComponent(query)}`;
+    const resp = await fetch(url, {signal: AbortSignal.timeout(6000)});
+    if (!resp.ok) return q;
+    const data = await resp.json();
+    const coin = data.coins?.[0];
+    if (coin) {
+      _coinIdCache[q] = coin.id;
+      return coin.id;
+    }
+  } catch {}
+  return q;
 }
 
 // ─── 주식 OHLCV — 다중 소스 폴백 ─────────────────────────────────────────────
@@ -461,17 +521,21 @@ async function fetchCryptoPrice(coinId) {
   } catch { return null; }
 }
 
-async function fetchCurrentPrice(query) {
-  const {ticker, type} = resolveTicker(query);
-  if(type==='crypto') return fetchCryptoPrice(ticker);
+async function fetchCurrentPrice(query, mode='auto') {
+  let {ticker, type} = resolveTicker(query, mode);
+  if (type === 'crypto') {
+    if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
+    return fetchCryptoPrice(ticker);
+  }
   return fetchYahooPrice(ticker);
 }
 
-async function fetchOHLCV(query, range='6mo') {
-  const {ticker, type} = resolveTicker(query);
-  if(type==='crypto') {
+async function fetchOHLCV(query, range='6mo', mode='auto') {
+  let {ticker, type} = resolveTicker(query, mode);
+  if (type === 'crypto') {
+    if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
     const daysMap = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
-    const days = daysMap[range]||180;
+    const days = daysMap[range] || 180;
     return fetchCryptoOHLCV(ticker, days);
   }
   return fetchYahooOHLCV(ticker, range);
@@ -738,18 +802,26 @@ const callClaudeVision = callGeminiVision;
 const callClaudeReport = callGeminiReport;
 
 // ─── Full Analysis Pipeline ───────────────────────────────────────────────────
-async function analyzeFull(query, apiKey, onStep) {
+async function analyzeFull(query, apiKey, onStep, mode='auto') {
   const steps = ['ticker','data','chart','vision','report'];
   let stepIdx = 0;
   const step = (s) => { stepIdx=steps.indexOf(s); onStep&&onStep(s,stepIdx); };
 
   step('ticker');
-  const {ticker, type} = resolveTicker(query);
+  // For crypto mode, resolve coin ID dynamically via CoinGecko search
+  let ticker, type;
+  if (mode === 'crypto') {
+    const coinId = await searchCoinId(query);
+    ticker = coinId;
+    type = 'crypto';
+  } else {
+    ({ticker, type} = resolveTicker(query, mode));
+  }
 
   step('data');
   let ohlcv, price;
   try {
-    ohlcv = await fetchOHLCV(query, '6mo');
+    ohlcv = await fetchOHLCV(query, '6mo', mode);
     if(!ohlcv || ohlcv.length < 10) throw new Error('데이터 부족');
     price = ohlcv[ohlcv.length-1]?.close;
   } catch(e) {
@@ -1345,9 +1417,43 @@ function TradingViewWidget({ticker}) {
   return <div className="tv-widget" ref={ref}/>;
 }
 
+// ─── Mode Selector ────────────────────────────────────────────────────────────
+function ModeSelector({mode, onChange}) {
+  const modes = [
+    {id:'auto',  label:'🔄 자동'},
+    {id:'stock', label:'📈 주식'},
+    {id:'crypto',label:'🪙 코인'},
+  ];
+  return (
+    <div style={{display:'flex',gap:4,marginBottom:10}}>
+      {modes.map(m=>(
+        <button key={m.id}
+          onClick={()=>onChange(m.id)}
+          style={{
+            padding:'5px 14px', borderRadius:6, fontSize:'.8rem', fontWeight:600,
+            border: mode===m.id ? 'none' : '1px solid #334155',
+            background: mode===m.id
+              ? (m.id==='stock' ? 'linear-gradient(135deg,#3b82f6,#2563eb)'
+                : m.id==='crypto' ? 'linear-gradient(135deg,#f59e0b,#d97706)'
+                : 'linear-gradient(135deg,#6366f1,#4f46e5)')
+              : '#0f172a',
+            color: mode===m.id ? '#fff' : '#64748b',
+            cursor:'pointer', transition:'all .15s',
+          }}>
+          {m.label}
+        </button>
+      ))}
+      <span style={{fontSize:'.75rem',color:'#475569',alignSelf:'center',marginLeft:4}}>
+        {mode==='stock'?'Yahoo Finance 검색':mode==='crypto'?'CoinGecko 검색':'자동 감지'}
+      </span>
+    </div>
+  );
+}
+
 // ─── Analysis Tab ─────────────────────────────────────────────────────────────
 function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [query, setQuery]   = useState('');
+  const [mode, setMode]     = useState('auto'); // 'auto' | 'stock' | 'crypto'
   const [loading, setLoading] = useState(false);
   const [step, setStep]     = useState('');
   const [report, setReport] = useState(null);
@@ -1355,8 +1461,6 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [imgB64, setImgB64] = useState(null);
   const [imgType, setImgType] = useState(null);
   const [logs, setLogs]     = useState(()=>ls_get('cs_logs',[]));
-
-  const effectiveKey = serverHasKey ? '__server__' : apiKey;
 
   const saveLog = r => {
     const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary?.slice(0,200)};
@@ -1373,13 +1477,14 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
     return true;
   };
 
-  const handleAnalyze = async (q) => {
+  const handleAnalyze = async (q, forceMode) => {
     const target = q || query;
     if(!target.trim()) return;
     if(!checkReady()) return;
+    const effectiveMode = forceMode || mode;
     setLoading(true); setError(''); setReport(null);
     try {
-      const r = await analyzeFull(target, apiKey, (s)=>setStep(s));
+      const r = await analyzeFull(target, apiKey, (s)=>setStep(s), effectiveMode);
       setReport(r);
       saveLog(r);
       if(settings.autoAlert && r.confidence>=settings.alertThreshold) {
@@ -1405,19 +1510,32 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
     finally { setLoading(false); }
   };
 
+  // Quick ticker sets per mode
+  const stockTickers = [{label:'AAPL',val:'AAPL'},{label:'TSLA',val:'TSLA'},{label:'NVDA',val:'NVDA'},{label:'MSFT',val:'MSFT'},{label:'삼성',val:'005930.KS'}];
+  const cryptoTickers = [{label:'BTC',val:'BTC'},{label:'ETH',val:'ETH'},{label:'SOL',val:'SOL'},{label:'XRP',val:'XRP'},{label:'BNB',val:'BNB'},{label:'ADA',val:'ADA'},{label:'DOGE',val:'DOGE'},{label:'TON',val:'TON'}];
+  const autoTickers = QUICK_TICKERS;
+  const quickList = mode==='stock' ? stockTickers : mode==='crypto' ? cryptoTickers : autoTickers;
+
   return (
     <div>
       <div className="card">
         <div className="card-title">📊 종목 분석</div>
 
-        {/* 티커 분석 영역 */}
+        {/* 모드 선택 */}
+        <ModeSelector mode={mode} onChange={m=>{setMode(m);setError('');}}/>
+
+        {/* 빠른 선택 티커 */}
         <div className="quick-tickers">
-          {QUICK_TICKERS.map(t=>(
-            <div key={t.val} className="quick-ticker" onClick={()=>handleAnalyze(t.val)}>{t.label}</div>
+          {quickList.map(t=>(
+            <div key={t.val} className="quick-ticker"
+              onClick={()=>{setQuery(t.val);handleAnalyze(t.val, mode);}}>
+              {t.label}
+            </div>
           ))}
         </div>
         <div className="analyze-box">
-          <SearchAutocomplete value={query} onChange={setQuery} onSearch={handleAnalyze}/>
+          <SearchAutocomplete value={query} onChange={setQuery} onSearch={q=>handleAnalyze(q, mode)}
+            placeholder={mode==='stock'?'주식 티커 (예: AAPL, 005930.KS)':mode==='crypto'?'코인명/심볼 (예: bitcoin, edgex, sol)':'종목명 / 티커 (예: AAPL, 삼성, BTC)'}/>
           <button className="btn-primary" onClick={()=>handleAnalyze()} disabled={loading||!query.trim()}>분석</button>
         </div>
 
