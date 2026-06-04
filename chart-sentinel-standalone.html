@@ -219,6 +219,56 @@ const CRYPTO_MAP = {
   'pyth-network':'pyth-network','pyth':'pyth-network',
 };
 
+// ─── Binance API ─────────────────────────────────────────────────────────────
+const BINANCE_BASE = 'https://api.binance.com/api/v3';
+
+// Map from query/alias → Binance USDT spot symbol
+const BINANCE_SYMBOL_MAP = {
+  'bitcoin':'BTCUSDT','btc':'BTCUSDT','비트코인':'BTCUSDT',
+  'ethereum':'ETHUSDT','eth':'ETHUSDT','이더리움':'ETHUSDT',
+  'solana':'SOLUSDT','sol':'SOLUSDT','솔라나':'SOLUSDT',
+  'ripple':'XRPUSDT','xrp':'XRPUSDT','리플':'XRPUSDT',
+  'bnb':'BNBUSDT','binancecoin':'BNBUSDT',
+  'dogecoin':'DOGEUSDT','doge':'DOGEUSDT','도지':'DOGEUSDT',
+  'cardano':'ADAUSDT','ada':'ADAUSDT',
+  'avalanche-2':'AVAXUSDT','avax':'AVAXUSDT','avalanche':'AVAXUSDT',
+  'matic-network':'MATICUSDT','matic':'MATICUSDT','pol':'POLUSDT','polygon':'MATICUSDT',
+  'chainlink':'LINKUSDT','link':'LINKUSDT',
+  'polkadot':'DOTUSDT','dot':'DOTUSDT',
+  'cosmos':'ATOMUSDT','atom':'ATOMUSDT',
+  'litecoin':'LTCUSDT','ltc':'LTCUSDT',
+  'tron':'TRXUSDT','trx':'TRXUSDT',
+  'shiba-inu':'SHIBUSDT','shib':'SHIBUSDT',
+  'near':'NEARUSDT','near-protocol':'NEARUSDT',
+  'aptos':'APTUSDT','apt':'APTUSDT',
+  'sui':'SUIUSDT',
+  'arbitrum':'ARBUSDT','arb':'ARBUSDT',
+  'optimism':'OPUSDT','op':'OPUSDT',
+  'pepe':'PEPEUSDT',
+  'bonk':'BONKUSDT',
+  'dogwifcoin':'WIFUSDT','wif':'WIFUSDT',
+  'the-open-network':'TONUSDT','ton':'TONUSDT',
+  'internet-computer':'ICPUSDT','icp':'ICPUSDT',
+  'stellar':'XLMUSDT','xlm':'XLMUSDT',
+  'uniswap':'UNIUSDT','uni':'UNIUSDT',
+  'injective':'INJUSDT','inj':'INJUSDT',
+  'sei-network':'SEIUSDT','sei':'SEIUSDT',
+  'render-token':'RENDERUSDT','rndr':'RENDERUSDT','render':'RENDERUSDT',
+  'worldcoin-wld':'WLDUSDT','wld':'WLDUSDT',
+  'jupiter-exchange-solana':'JUPUSDT','jup':'JUPUSDT',
+  'pyth-network':'PYTHUSDT','pyth':'PYTHUSDT',
+};
+
+// Timeframe config for each interval
+const TIMEFRAMES = [
+  {id:'5m',  label:'5분',  binanceInterval:'5m',  binanceLimit:288, yahooInterval:'5m',  yahooRange:'5d'},
+  {id:'30m', label:'30분', binanceInterval:'30m', binanceLimit:336, yahooInterval:'30m', yahooRange:'1mo'},
+  {id:'4h',  label:'4시간', binanceInterval:'4h',  binanceLimit:300, yahooInterval:'60m', yahooRange:'3mo'},
+  {id:'1d',  label:'일봉',  binanceInterval:'1d',  binanceLimit:300, yahooInterval:'1d',  yahooRange:'2y'},
+  {id:'1w',  label:'주봉',  binanceInterval:'1w',  binanceLimit:200, yahooInterval:'1wk', yahooRange:'5y'},
+  {id:'1M',  label:'월봉',  binanceInterval:'1M',  binanceLimit:60,  yahooInterval:'1mo', yahooRange:'10y'},
+];
+
 // ─── localStorage helpers ─────────────────────────────────────────────────────
 const ls_get = (key, def=null) => {
   try { const v=localStorage.getItem(key); return v?JSON.parse(v):def; }
@@ -411,6 +461,69 @@ async function searchCoinId(query) {
   return q;
 }
 
+async function fetchBinanceKlines(symbol, interval='1d', limit=300) {
+  const url = `${BINANCE_BASE}/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+  const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
+  if (!resp.ok) {
+    const e = await resp.json().catch(()=>({}));
+    throw new Error(`Binance ${symbol}: ${e.msg || resp.status}`);
+  }
+  const data = await resp.json();
+  if (!Array.isArray(data) || data.length === 0) throw new Error(`Binance ${symbol}: 데이터 없음`);
+  return data.map(k => ({
+    date: new Date(k[0]).toISOString().slice(0,16).replace('T',' '),
+    t: k[0],
+    open: +k[1], high: +k[2], low: +k[3], close: +k[4],
+    volume: +k[5], adjclose: +k[4],
+  }));
+}
+
+async function resolveBinanceSymbol(query) {
+  const q = query.trim().toLowerCase();
+  if (BINANCE_SYMBOL_MAP[q]) return BINANCE_SYMBOL_MAP[q];
+  // Try to get the symbol via CoinGecko search, then append USDT
+  try {
+    const coinId = await searchCoinId(query);
+    // Try coinId directly as symbol
+    const sym = coinId.replace(/-/g,'').toUpperCase();
+    // Quick test if symbol exists on Binance
+    const testUrl = `${BINANCE_BASE}/klines?symbol=${sym}USDT&interval=1d&limit=1`;
+    const r = await fetch(testUrl, {signal: AbortSignal.timeout(4000)});
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d) && d.length > 0) return sym + 'USDT';
+    }
+    // Try the raw query as symbol
+    const rawSym = query.trim().toUpperCase();
+    const testUrl2 = `${BINANCE_BASE}/klines?symbol=${rawSym}USDT&interval=1d&limit=1`;
+    const r2 = await fetch(testUrl2, {signal: AbortSignal.timeout(4000)});
+    if (r2.ok) {
+      const d2 = await r2.json();
+      if (Array.isArray(d2) && d2.length > 0) return rawSym + 'USDT';
+    }
+  } catch {}
+  return query.trim().toUpperCase() + 'USDT';
+}
+
+async function fetchOHLCVForTimeframe(query, tfCfg, mode='auto') {
+  const {ticker, type} = resolveTicker(query, mode);
+
+  if (type === 'crypto') {
+    // Try Binance first (real volume)
+    try {
+      const symbol = await resolveBinanceSymbol(query);
+      return await fetchBinanceKlines(symbol, tfCfg.binanceInterval, tfCfg.binanceLimit);
+    } catch(binanceErr) {
+      // Fall back to CoinGecko daily
+      const coinId = CRYPTO_MAP[query.trim().toLowerCase()] || await searchCoinId(query);
+      return await fetchCryptoOHLCV(coinId, 180);
+    }
+  }
+
+  // Stock: Yahoo Finance with requested interval/range
+  return fetchYahooOHLCV(ticker, tfCfg.yahooRange, tfCfg.yahooInterval);
+}
+
 // ─── 주식 OHLCV — 다중 소스 폴백 ─────────────────────────────────────────────
 // 1순위: Yahoo Finance v8 (corsproxy.io 프록시)
 // 2순위: Yahoo Finance v8 (allorigins 프록시)
@@ -533,10 +646,20 @@ async function fetchCurrentPrice(query, mode='auto') {
 async function fetchOHLCV(query, range='6mo', mode='auto') {
   let {ticker, type} = resolveTicker(query, mode);
   if (type === 'crypto') {
-    if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
-    const daysMap = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
-    const days = daysMap[range] || 180;
-    return fetchCryptoOHLCV(ticker, days);
+    // Try Binance first for real volume data
+    try {
+      const symbol = await resolveBinanceSymbol(query);
+      // Map range to Binance limit
+      const limitMap = {'1mo':90,'3mo':180,'6mo':300,'1y':365,'2y':500,'5y':700};
+      const limit = limitMap[range] || 300;
+      return await fetchBinanceKlines(symbol, '1d', limit);
+    } catch {
+      // Fallback to CoinGecko
+      if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
+      const daysMap = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
+      const days = daysMap[range] || 180;
+      return fetchCryptoOHLCV(ticker, days);
+    }
   }
   return fetchYahooOHLCV(ticker, range);
 }
