@@ -622,6 +622,24 @@ async function fetchBinanceKlines(symbol, interval='1d', limit=300) {
   }));
 }
 
+async function fetchBinanceFuturesKlines(symbol, interval='1d', limit=300) {
+  const sym = symbol.toUpperCase().endsWith('USDT') ? symbol.toUpperCase() : symbol.toUpperCase()+'USDT';
+  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${interval}&limit=${limit}`;
+  const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
+  if (!resp.ok) {
+    const e = await resp.json().catch(()=>({}));
+    throw new Error(`Binance Futures ${sym}: ${e.msg || resp.status}`);
+  }
+  const data = await resp.json();
+  if (!Array.isArray(data) || data.length === 0) throw new Error(`Binance Futures ${sym}: 데이터 없음`);
+  return data.map(k => ({
+    date: new Date(k[0]).toISOString().slice(0,16).replace('T',' '),
+    t: k[0],
+    open: +k[1], high: +k[2], low: +k[3], close: +k[4],
+    volume: +k[5], adjclose: +k[4],
+  }));
+}
+
 async function fetchOKXKlines(symbol, interval='1d', limit=300) {
   const instId = symbol.toUpperCase().endsWith('USDT')
     ? symbol.slice(0,-4).toUpperCase() + '-USDT'
@@ -706,29 +724,28 @@ async function fetchOHLCVForTimeframe(query, tfCfg, mode='auto') {
   const {ticker, type} = resolveTicker(query, mode);
 
   if (type === 'crypto') {
+    const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
     const errors = [];
-    // 1) Binance
+    // 1) Binance Spot
     try {
       const symbol = await resolveBinanceSymbol(query);
       return await fetchBinanceKlines(symbol, tfCfg.binanceInterval, tfCfg.binanceLimit);
-    } catch(e) { errors.push('Binance: ' + e.message); }
-    // 2) OKX
-    try {
-      const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
-      return await fetchOKXKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit);
-    } catch(e) { errors.push('OKX: ' + e.message); }
-    // 3) Bybit
-    try {
-      const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
-      return await fetchBybitKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit);
-    } catch(e) { errors.push('Bybit: ' + e.message); }
-    // 4) CoinGecko (daily only, no volume)
+    } catch(e) { errors.push('Spot: ' + e.message); }
+    // 2) Binance Futures
+    try { return await fetchBinanceFuturesKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit); }
+    catch(e) { errors.push('Futures: ' + e.message); }
+    // 3) CoinGecko
     try {
       const coinId = CRYPTO_MAP[query.trim().toLowerCase()] || await searchCoinId(query);
       return await fetchCryptoOHLCV(coinId, 180);
     } catch(e) { errors.push('CoinGecko: ' + e.message); }
-    throw new Error(`코인 데이터를 가져올 수 없습니다. 심볼/이름을 확인해주세요.
-(${errors.slice(0,2).join(' | ')})`);
+    // 4) OKX
+    try { return await fetchOKXKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit); }
+    catch(e) { errors.push('OKX: ' + e.message); }
+    // 5) Bybit
+    try { return await fetchBybitKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit); }
+    catch(e) { errors.push('Bybit: ' + e.message); }
+    throw new Error(`코인 데이터를 가져올 수 없습니다. 심볼/이름을 확인해주세요.\n(${errors.slice(0,2).join(' | ')})`);
   }
 
   // Stock: Yahoo Finance with requested interval/range
@@ -867,18 +884,20 @@ async function fetchOHLCV(query, range='6mo', mode='auto') {
     const days = daysMap[range] || 180;
     const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
     const errors = [];
-    // 1) Binance
+    // 1) Binance Spot
     try { const s = await resolveBinanceSymbol(query); return await fetchBinanceKlines(s,'1d',limit); }
-    catch(e) { errors.push('Binance: '+e.message); }
-    // 2) OKX
-    try { return await fetchOKXKlines(sym,'1d',limit); } catch(e) { errors.push('OKX: '+e.message); }
-    // 3) Bybit
-    try { return await fetchBybitKlines(sym,'1d',limit); } catch(e) { errors.push('Bybit: '+e.message); }
-    // 4) CoinGecko
+    catch(e) { errors.push('Spot: '+e.message); }
+    // 2) Binance Futures
+    try { return await fetchBinanceFuturesKlines(sym,'1d',limit); } catch(e) { errors.push('Futures: '+e.message); }
+    // 3) CoinGecko
     try {
       if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
       return await fetchCryptoOHLCV(ticker, days);
     } catch(e) { errors.push('CoinGecko: '+e.message); }
+    // 4) OKX
+    try { return await fetchOKXKlines(sym,'1d',limit); } catch(e) { errors.push('OKX: '+e.message); }
+    // 5) Bybit
+    try { return await fetchBybitKlines(sym,'1d',limit); } catch(e) { errors.push('Bybit: '+e.message); }
     throw new Error(`코인 데이터를 가져올 수 없습니다. 심볼/이름을 확인해주세요.\n(${errors.slice(0,2).join(' | ')})`);
   }
   return fetchYahooOHLCV(ticker, range);
@@ -1963,103 +1982,102 @@ function TradePlanSection({computed, report}) {
   );
 }
 
-function ReportCard({report, onSave}) {
+function ReportHero({report, onSave}) {
   if(!report) return null;
   const pos = report.position || 'hold';
-  const badgeClass = pos==='long'?'badge-green':pos==='short'?'badge-red':'badge-yellow';
-  const posColor   = pos==='long'?'#34d399':pos==='short'?'#f87171':'#fbbf24';
-  const posLabel   = pos==='long'?'LONG ▲':pos==='short'?'SHORT ▼':pos.toUpperCase();
-  const curPrice   = report.price ? Number(report.price) : null;
+  const posColor = pos==='long'?'#34d399':pos==='short'?'#f87171':'#fbbf24';
+  const posLabel = pos==='long'?'LONG ▲':pos==='short'?'SHORT ▼':pos.toUpperCase();
+  const curPrice = report.price ? Number(report.price) : null;
+  const conf = report.confidence || 50;
+  return (
+    <div className="card" style={{background:'linear-gradient(135deg,#0f172a,#1a2540)',border:'1px solid #334155',padding:'18px 20px'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+        {/* Left: Ticker + Price */}
+        <div>
+          <div style={{fontSize:'.75rem',color:'#475569',fontWeight:600,letterSpacing:'0.08em',marginBottom:2}}>종목</div>
+          <div style={{fontSize:'1.7rem',fontWeight:800,color:'#60a5fa'}}>{(report.ticker||'').toUpperCase()}</div>
+          <div style={{fontSize:'1.5rem',fontWeight:700,color:'#e2e8f0',fontFamily:'monospace',marginTop:2}}>
+            {curPrice ? `$${curPrice.toLocaleString(undefined,{maximumFractionDigits:4})}` : '—'}
+          </div>
+          <div style={{fontSize:'.75rem',color:'#475569',marginTop:2}}>현재가</div>
+        </div>
+        {/* Right: Position + Confidence */}
+        <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}>
+          <div style={{fontSize:'1.2rem',fontWeight:800,color:posColor,background:posColor+'18',padding:'6px 20px',borderRadius:8,border:`1.5px solid ${posColor}55`}}>{posLabel}</div>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <span className="badge badge-blue" style={{fontSize:'.85rem',padding:'4px 12px'}}>신뢰도 {conf}%</span>
+            {report.risk_level && <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`}>
+              리스크 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
+            </span>}
+            {onSave && <button className="btn-secondary" style={{padding:'3px 10px',fontSize:'.78rem'}} onClick={()=>onSave(report)}>저장</button>}
+          </div>
+        </div>
+      </div>
+      {/* Signals */}
+      {report.signals?.length>0 && (
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
+          {report.signals.map((s,i)=><span key={i} className="badge badge-blue" style={{fontSize:'.8rem',padding:'4px 10px'}}>{s}</span>)}
+        </div>
+      )}
+      {(report._dataError||report._noData) && (
+        <div className="alert-box alert-warn" style={{marginTop:10,fontSize:'.82rem'}}>
+          {report._dataError||'📊 차트 데이터 없음 — 텍스트 기반 분석입니다.'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalysisSection({report}) {
+  if(!report) return null;
+  const curPrice = report.price ? Number(report.price) : null;
   const fmtPrice = v => v ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:4})}` : null;
-  // Show % distance from current price and direction arrow
   const PriceTag = ({val, label, color}) => {
-    if (!val) return null;
-    const n = Number(val);
-    const pct = curPrice ? ((n - curPrice) / curPrice * 100) : null;
-    const dir = pct == null ? '' : pct >= 0 ? `▲ +${pct.toFixed(1)}%` : `▼ ${pct.toFixed(1)}%`;
-    const dirColor = pct == null ? '#64748b' : pct >= 0 ? '#4ade80' : '#f87171';
+    if(!val) return null;
+    const n=Number(val), pct=curPrice?((n-curPrice)/curPrice*100):null;
+    const dir=pct==null?'':pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`;
+    const dc=pct==null?'#64748b':pct>=0?'#4ade80':'#f87171';
     return (
       <div className="stat-card" style={{flex:1,minWidth:90}}>
         <div style={{color,fontSize:'1.05rem',fontWeight:700}}>{fmtPrice(val)}</div>
-        {pct != null && <div style={{color:dirColor,fontSize:'.75rem',fontWeight:700,marginTop:2}}>{dir}</div>}
+        {pct!=null&&<div style={{color:dc,fontSize:'.75rem',fontWeight:700,marginTop:2}}>{dir}</div>}
         <div className="stat-label">{label}</div>
       </div>
     );
   };
   return (
     <div className="card">
-      {/* ── 히어로 헤더: 종목 + 현재가 크게 표시 ── */}
-      <div style={{background:'linear-gradient(135deg,#0f172a,#1a2540)',border:'1px solid #334155',borderRadius:10,padding:'16px 20px',marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-        <div>
-          <div style={{fontSize:'.78rem',color:'#475569',fontWeight:600,letterSpacing:'0.08em',marginBottom:2}}>종목</div>
-          <div style={{fontSize:'1.6rem',fontWeight:800,color:'#60a5fa',letterSpacing:'0.03em'}}>{(report.ticker||'').toUpperCase()}</div>
-        </div>
-        <div style={{textAlign:'center'}}>
-          <div style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginBottom:2}}>현재가</div>
-          <div style={{fontSize:'1.9rem',fontWeight:800,color:'#e2e8f0',fontFamily:'monospace'}}>
-            {curPrice ? `$${curPrice.toLocaleString(undefined,{maximumFractionDigits:4})}` : '—'}
-          </div>
-        </div>
-        <div style={{textAlign:'right',display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
-          <div style={{fontSize:'1.1rem',fontWeight:800,color:posColor,background:posColor+'22',padding:'5px 16px',borderRadius:8,border:`1px solid ${posColor}55`}}>{posLabel}</div>
-          <div style={{display:'flex',gap:6,alignItems:'center'}}>
-            <span className="badge badge-blue">신뢰도 {report.confidence||50}%</span>
-            {report.risk_level && (
-              <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`}>
-                리스크 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
-              </span>
-            )}
-            {onSave && <button className="btn-secondary" style={{padding:'3px 10px',fontSize:'.78rem'}} onClick={()=>onSave(report)}>저장</button>}
-          </div>
-        </div>
-      </div>
-
-      {/* 데이터 수집 실패 / 텍스트 분석 안내 */}
-      {(report._dataError || report._noData) && (
-        <div className="alert-box alert-warn" style={{marginBottom:12,fontSize:'.82rem'}}>
-          {report._dataError || '📊 차트 데이터 없음 — 텍스트 기반 분석입니다. 기술적 지표는 표시되지 않습니다.'}
-        </div>
-      )}
-
-      {/* 차트 이미지 */}
-      {report.chartB64 && (
-        <img src={`data:image/png;base64,${report.chartB64}`} className="chart-img" alt="chart"
-          style={{width:'100%',borderRadius:8,border:'1px solid #334155',marginBottom:12}}/>
-      )}
-
-      {/* 요약 */}
-      {report.summary && (
-        <div style={{background:'#0f172a',border:'1px solid #1e3a5f',borderLeft:'3px solid #3b82f6',borderRadius:8,padding:'14px 16px',marginBottom:14,lineHeight:1.8,fontSize:'.92rem',color:'#cbd5e1'}}>
-          {report.summary}
-        </div>
-      )}
-
-      {/* 핵심 지표 수치 — 현재가 대비 방향 표시 */}
-      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
+      <div className="card-title">📐 분석</div>
+      {/* Key price levels */}
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
         <PriceTag val={report.support}      label="지지선"  color="#34d399"/>
         <PriceTag val={report.resistance}   label="저항선"  color="#f87171"/>
         <PriceTag val={report.target_price} label="목표가"  color="#a78bfa"/>
         <PriceTag val={report.stop_loss}    label="손절가"  color="#fb923c"/>
       </div>
+      {/* Computed indicators */}
+      <ComputedTechSection computed={report.computed}/>
+      {/* Fibonacci */}
+      <FibSection computed={report.computed}/>
+      {/* Trade plan */}
+      <TradePlanSection computed={report.computed} report={report}/>
+    </div>
+  );
+}
 
-      {/* 시그널 태그 */}
-      {report.signals?.length>0 && (
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
-          {report.signals.map((s,i)=><span key={i} className="badge badge-blue" style={{fontSize:'.8rem',padding:'4px 10px'}}>{s}</span>)}
+function ConclusionSection({report}) {
+  if(!report) return null;
+  return (
+    <div className="card">
+      <div className="card-title">💡 결론 및 AI 의견</div>
+      {/* Summary */}
+      {report.summary && (
+        <div style={{background:'#0f172a',border:'1px solid #1e3a5f',borderLeft:'3px solid #3b82f6',borderRadius:8,padding:'14px 16px',marginBottom:14,lineHeight:1.8,fontSize:'.92rem',color:'#cbd5e1'}}>
+          {report.summary}
         </div>
       )}
-
-      {/* 계산된 기술지표 (RSI / MA / BB) */}
-      <ComputedTechSection computed={report.computed}/>
-
-      {/* 피보나치 레벨 */}
-      <FibSection computed={report.computed}/>
-
-      {/* 매매 플랜 */}
-      <TradePlanSection computed={report.computed} report={report}/>
-
-      {/* AI 세부 분석 항목 */}
-      <div style={{marginTop:4}}>
+      {/* AI detail rows */}
+      <div>
         <InfoRow label="📈 추세"         value={report.trend}/>
         <InfoRow label="📊 이동평균선"    value={report.ma_status}/>
         <InfoRow label="📉 볼린저밴드"    value={report.bollinger}/>
@@ -2069,8 +2087,7 @@ function ReportCard({report, onSave}) {
         <InfoRow label="🔬 종합 기술분석" value={report.technical}/>
         <InfoRow label="💡 투자의견"      value={report.recommendation} color="#fbbf24"/>
       </div>
-
-      {/* Vision 원문 펼치기 */}
+      {/* Vision raw */}
       {report.visionText && (
         <details style={{marginTop:12}}>
           <summary style={{cursor:'pointer',color:'#64748b',fontSize:'.82rem'}}>▶ AI 차트 분석 원문 보기</summary>
@@ -2080,6 +2097,7 @@ function ReportCard({report, onSave}) {
     </div>
   );
 }
+
 
 
 function SearchAutocomplete({value, onChange, onSearch, placeholder}) {
@@ -2384,16 +2402,17 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
 
       {report && !loading && (
         <>
+          <ReportHero report={report} onSave={()=>{}}/>
           <InteractiveChart query={query||report.ticker} mode={mode} resolvedTicker={report.ticker}/>
-          <ReportCard report={report} onSave={()=>{}}/>
+          {report.ticker && (
+            <div className="card" style={{padding:'12px 16px'}}>
+              <div className="card-title" style={{marginBottom:8}}>📺 TradingView</div>
+              <TradingViewWidget ticker={report.ticker}/>
+            </div>
+          )}
+          <AnalysisSection report={report}/>
+          <ConclusionSection report={report}/>
         </>
-      )}
-
-      {report?.ticker && !loading && (
-        <div className="card">
-          <div className="card-title">📺 TradingView 차트</div>
-          <TradingViewWidget ticker={report.ticker}/>
-        </div>
       )}
 
       {logs.length>0 && (
@@ -2503,7 +2522,7 @@ function CompareTab({apiKey, serverHasKey}) {
               {r.error ? (
                 <div className="card"><div className="alert-box alert-err"><b>{r.ticker}</b>: {r.error}</div></div>
               ) : (
-                <ReportCard report={r}/>
+                <div><ReportHero report={r}/><AnalysisSection report={r}/><ConclusionSection report={r}/></div>
               )}
             </div>
           ))}
