@@ -257,6 +257,81 @@ const BINANCE_SYMBOL_MAP = {
   'worldcoin-wld':'WLDUSDT','wld':'WLDUSDT',
   'jupiter-exchange-solana':'JUPUSDT','jup':'JUPUSDT',
   'pyth-network':'PYTHUSDT','pyth':'PYTHUSDT',
+  'hyperliquid':'HYPEUSDT','hype':'HYPEUSDT',
+  'notcoin':'NOTUSDT','not':'NOTUSDT',
+  'floki':'FLOKIUSDT','floki-inu':'FLOKIUSDT',
+  'fetch-ai':'FETUSDT','fet':'FETUSDT','fetchai':'FETUSDT',
+  'gala':'GALAUSDT',
+  'the-sandbox':'SANDUSDT','sand':'SANDUSDT',
+  'decentraland':'MANAUSDT','mana':'MANAUSDT',
+  'axie-infinity':'AXSUSDT','axs':'AXSUSDT',
+  'immutable-x':'IMXUSDT','imx':'IMXUSDT',
+  'blur':'BLURUSDT',
+  'alt-layer':'ALTUSDT','alt':'ALTUSDT',
+  'manta-network':'MANTAUSDT','manta':'MANTAUSDT',
+  'starknet':'STRKUSDT','strk':'STRKUSDT',
+  'dymension':'DYMUSDT','dym':'DYMUSDT',
+  'pixels':'PIXELUSDT','pixel':'PIXELUSDT',
+  'portal':'PORTALUSDT','portal-gaming':'PORTALUSDT',
+  'jito-governance-token':'JITOUSDT','jito':'JITOUSDT',
+  'tensor':'TNSR','tnsr':'TNSRUSDT',
+  'zeta-chain':'ZETAUSDT','zeta':'ZETAUSDT',
+  'celestia':'TIAUSDT','tia':'TIAUSDT',
+  'saga':'SAGAUSDT',
+  'omni-network':'OMNIUSDT','omni':'OMNIUSDT',
+  'bome':'BOMEUSDT',
+  'memecoin':'MEMEUSDT','meme':'MEMEUSDT',
+  'ethena':'ENAUSDT','ena':'ENAUSDT',
+  'w-coin':'WUSDT','wormhole':'WUSDT',
+  'zksync':'ZKUSDT','zk':'ZKUSDT',
+  'layerzero':'ZROUSDT','zro':'ZROUSDT',
+  'hamster-kombat':'HMSTRUSDT','hmstr':'HMSTRUSDT',
+  'dogs-2':'DOGSUSDT','dogs':'DOGSUSDT',
+  'major':'MAJORUSDT',
+  'cati':'CATIUSDT',
+  'blum':'BLUMUSDT',
+  'act-i-the-ai-prophecy':'ACTUSDT','act':'ACTUSDT',
+  'goat':'GOATUSDT',
+  'pnut':'PNUTUSDT',
+  'moodeng':'MOODENGUSDT',
+  'usual':'USUALUSDT',
+  'pengu':'PENGUUSDT','pudgy-penguins':'PENGUUSDT',
+  'movement':'MOVEUSDT','move':'MOVEUSDT',
+  'the-open-network':'TONUSDT','ton':'TONUSDT',
+  'virtuals-protocol':'VIRTUALUSDT','virtual':'VIRTUALUSDT',
+  'aixbt':'AIXBTUSDT',
+  'fartcoin':'FARTCOINUSDT',
+  'ai16z':'AI16ZUSDT',
+  'solv-protocol':'SOLVUSDT','solv':'SOLVUSDT',
+  'kaito':'KAITOUSDT',
+  'berachain-bera':'BERAUSDT','bera':'BERAUSDT',
+  'sonic-3':'SUSDT','sonic':'SUSDT',
+  'toshi':'TOSHIUSDT',
+  'trump':'TRUMPUSDT','official-trump':'TRUMPUSDT',
+  'melania-meme':'MELANIAUSDT','melania':'MELANIAUSDT',
+  'deepseek':'DEEPUSDT',
+  'ip-protocol':'IPUSDT',
+  'test':'TESTUSDT',
+  'sign':'SIGNUSDT',
+  'red-2':'REDUSDT','red':'REDUSDT',
+  'particle-network':'PARTUSDT',
+  'initia':'INITUSDT',
+  'plume':'PLUMEUSDT',
+  'monad':'MONUSDT','mon':'MONUSDT',
+  'sui-2':'SUIUSDT',
+  'toncoin':'TONUSDT',
+  'near-protocol':'NEARUSDT',
+  'filecoin':'FILUSDT','fil':'FILUSDT',
+  'hedera':'HBARUSDT','hbar':'HBARUSDT',
+  'kaspa':'KASUSDT','kas':'KASUSDT',
+  'vechain':'VETUSDT','vet':'VETUSDT',
+  'algorand':'ALGOUSDT','algo':'ALGOUSDT',
+  'iota':'IOTAUSDT',
+  'theta-token':'THETAUSDT','theta':'THETAUSDT',
+  'flow':'FLOWUSDT',
+  'fantom':'FTMUSDT','ftm':'FTMUSDT',
+  'kucoin-shares':'KSMUSDT','ksm':'KSMUSDT',
+  'edgex':'EDGEXUSDT','edge-matrix-computing':'EDGEXUSDT',
 };
 
 // Timeframe config for each interval
@@ -447,18 +522,30 @@ async function searchCoinId(query) {
   const q = query.trim().toLowerCase();
   if (CRYPTO_MAP[q]) return CRYPTO_MAP[q];
   if (_coinIdCache[q]) return _coinIdCache[q];
+
+  const cgUrl = `${CG_BASE}/search?query=${encodeURIComponent(query)}`;
+  const tryParse = async (resp) => {
+    if (!resp.ok) return null;
+    let data = await resp.json();
+    if (data?.contents) data = JSON.parse(data.contents); // allorigins wrapper
+    return data?.coins?.[0]?.id || null;
+  };
+
+  // 1) direct
   try {
-    const url = `${CG_BASE}/search?query=${encodeURIComponent(query)}`;
-    const resp = await fetch(url, {signal: AbortSignal.timeout(6000)});
-    if (!resp.ok) return q;
-    const data = await resp.json();
-    const coin = data.coins?.[0];
-    if (coin) {
-      _coinIdCache[q] = coin.id;
-      return coin.id;
-    }
+    const id = await tryParse(await fetch(cgUrl, {signal: AbortSignal.timeout(5000)}));
+    if (id) { _coinIdCache[q] = id; return id; }
   } catch {}
-  return q;
+
+  // 2) proxy fallback
+  for (const makeProxy of PROXY_LIST) {
+    try {
+      const id = await tryParse(await fetch(makeProxy(cgUrl), {signal: AbortSignal.timeout(6000)}));
+      if (id) { _coinIdCache[q] = id; return id; }
+    } catch {}
+  }
+
+  return q; // 최종 폴백: 원본 쿼리 그대로
 }
 
 async function fetchBinanceKlines(symbol, interval='1d', limit=300) {
@@ -474,6 +561,40 @@ async function fetchBinanceKlines(symbol, interval='1d', limit=300) {
     date: new Date(k[0]).toISOString().slice(0,16).replace('T',' '),
     t: k[0],
     open: +k[1], high: +k[2], low: +k[3], close: +k[4],
+    volume: +k[5], adjclose: +k[4],
+  }));
+}
+
+async function fetchOKXKlines(symbol, interval='1d', limit=300) {
+  const instId = symbol.toUpperCase().endsWith('USDT')
+    ? symbol.slice(0,-4).toUpperCase() + '-USDT'
+    : symbol.toUpperCase() + '-USDT';
+  const barMap = {'1d':'1D','1w':'1W','1M':'1M','4h':'4H','30m':'30m','5m':'5m','1h':'1H','2h':'2H'};
+  const bar = barMap[interval] || '1D';
+  const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
+  const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
+  if (!resp.ok) throw new Error(`OKX ${instId}: ${resp.status}`);
+  const data = await resp.json();
+  if (!data.data?.length) throw new Error(`OKX ${instId}: 데이터 없음`);
+  return data.data.slice().reverse().map(k => ({
+    date: new Date(+k[0]).toISOString().slice(0,16).replace('T',' '),
+    t: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4],
+    volume: +k[5], adjclose: +k[4],
+  }));
+}
+
+async function fetchBybitKlines(symbol, interval='1d', limit=300) {
+  const sym = symbol.toUpperCase().endsWith('USDT') ? symbol.toUpperCase() : symbol.toUpperCase()+'USDT';
+  const intMap = {'1d':'D','1w':'W','1M':'M','4h':'240','30m':'30','5m':'5','1h':'60'};
+  const i = intMap[interval] || 'D';
+  const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${sym}&interval=${i}&limit=${limit}`;
+  const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
+  if (!resp.ok) throw new Error(`Bybit ${sym}: ${resp.status}`);
+  const data = await resp.json();
+  if (!data.result?.list?.length) throw new Error(`Bybit ${sym}: 데이터 없음`);
+  return data.result.list.slice().reverse().map(k => ({
+    date: new Date(+k[0]).toISOString().slice(0,16).replace('T',' '),
+    t: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4],
     volume: +k[5], adjclose: +k[4],
   }));
 }
@@ -509,15 +630,29 @@ async function fetchOHLCVForTimeframe(query, tfCfg, mode='auto') {
   const {ticker, type} = resolveTicker(query, mode);
 
   if (type === 'crypto') {
-    // Try Binance first (real volume)
+    const errors = [];
+    // 1) Binance
     try {
       const symbol = await resolveBinanceSymbol(query);
       return await fetchBinanceKlines(symbol, tfCfg.binanceInterval, tfCfg.binanceLimit);
-    } catch(binanceErr) {
-      // Fall back to CoinGecko daily
+    } catch(e) { errors.push('Binance: ' + e.message); }
+    // 2) OKX
+    try {
+      const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
+      return await fetchOKXKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit);
+    } catch(e) { errors.push('OKX: ' + e.message); }
+    // 3) Bybit
+    try {
+      const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
+      return await fetchBybitKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit);
+    } catch(e) { errors.push('Bybit: ' + e.message); }
+    // 4) CoinGecko (daily only, no volume)
+    try {
       const coinId = CRYPTO_MAP[query.trim().toLowerCase()] || await searchCoinId(query);
       return await fetchCryptoOHLCV(coinId, 180);
-    }
+    } catch(e) { errors.push('CoinGecko: ' + e.message); }
+    throw new Error(`코인 데이터를 가져올 수 없습니다. 심볼/이름을 확인해주세요.
+(${errors.slice(0,2).join(' | ')})`);
   }
 
   // Stock: Yahoo Finance with requested interval/range
@@ -1296,10 +1431,32 @@ ${visionText}
 }
 
 async function analyzeDirectly(query, apiKey) {
-  const text = await callGemini(GEMINI_REPORT_MODEL, [{
-    text: `${query}에 대해 투자 분석을 해주세요. 현재 시장 상황, 기술적/기본적 분석, 리스크 요인, 투자 의견을 한국어로 상세히 답변해주세요.`,
-  }], apiKey);
-  return {summary: text, position:'hold', confidence:50};
+  const prompt = `당신은 전문 퀀트 애널리스트입니다. "${query}" 종목에 대해 최신 시장 정보를 바탕으로 분석하세요.
+차트 데이터 없이 텍스트 기반 분석임을 명시하고, 알려진 정보 범위 내에서 분석합니다.
+
+아래 JSON 형식으로만 출력하세요 (마크다운, 코드펜스 없이 JSON만):
+{
+  "ticker": "${query}",
+  "price": null,
+  "position": "long 또는 short 또는 hold 또는 none",
+  "confidence": 0~100 사이 숫자,
+  "summary": "현재 이 자산에 대해 알려진 핵심 정보와 투자 시사점 3~4문장 평문. 마크다운 기호 없이.",
+  "trend": "최근 알려진 가격 동향 및 시장 심리 해석",
+  "technical": "기술적 분석이 불가하므로 기본적 분석 또는 시장 컨텍스트 서술",
+  "recommendation": "투자 의견과 주의사항 평문",
+  "risk_level": "low 또는 medium 또는 high",
+  "signals": ["핵심 정보 1", "핵심 정보 2", "핵심 정보 3"],
+  "_noData": true
+}`;
+  const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey);
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'').trim();
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+  } catch {}
+  // last resort: plain text as summary (strip markdown)
+  const plain = text.replace(/#{1,6}\s*/g,'').replace(/\*{1,2}([^*]+)\*{1,2}/g,'$1').replace(/---+/g,'').trim();
+  return {summary: plain.slice(0,600), position:'hold', confidence:40, _noData:true};
 }
 
 // 하위 호환: 기존 callClaudeVision/Report 호출부가 있다면 Gemini로 포워딩
@@ -1776,9 +1933,11 @@ function ReportCard({report, onSave}) {
         </div>
       </div>
 
-      {/* 데이터 수집 실패 안내 */}
-      {report._dataError && (
-        <div className="alert-box alert-warn" style={{marginBottom:12,fontSize:'.82rem'}}>{report._dataError}</div>
+      {/* 데이터 수집 실패 / 텍스트 분석 안내 */}
+      {(report._dataError || report._noData) && (
+        <div className="alert-box alert-warn" style={{marginBottom:12,fontSize:'.82rem'}}>
+          {report._dataError || '📊 차트 데이터 없음 — 텍스트 기반 분석입니다. 기술적 지표는 표시되지 않습니다.'}
+        </div>
       )}
 
       {/* 차트 이미지 */}
