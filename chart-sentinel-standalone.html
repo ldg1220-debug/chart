@@ -1768,12 +1768,15 @@ const callClaudeReport = callGeminiReport;
 
 // ─── Phase 1: Fast data + indicator fetch ────────────────────────────────────
 async function fetchAnalysisPhase1(query, mode='auto') {
-  // Resolve Korean name if needed
   let {ticker, type} = resolveTicker(query, mode);
-  if (mode === 'crypto') {
-    try { ticker = await searchCoinId(query) || ticker; } catch {}
-  }
-  if (type === 'stock' && /[가-힣]/.test(ticker) && !ticker.includes('.')) {
+
+  if (type === 'crypto') {
+    // 코인: 로컬 맵만 사용 (Yahoo/CoinGecko 프록시 불필요)
+    const q = query.trim().toLowerCase();
+    const binSym = BINANCE_SYMBOL_MAP[q];
+    ticker = binSym ? binSym.replace(/USDT$/i,'') : query.trim().toUpperCase();
+  } else if (/[가-힣]/.test(ticker) && !ticker.includes('.')) {
+    // 한국 주식 이름 → 티커 동적 검색
     try { const found = await searchKrTicker(ticker); if (found) ticker = found; } catch {}
   }
 
