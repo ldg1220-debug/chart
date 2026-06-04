@@ -235,6 +235,110 @@ function pctReturns(prices) {
   return prices.slice(1).map((p,i)=>(p-prices[i])/prices[i]);
 }
 
+// ─── Advanced Indicators ─────────────────────────────────────────────────────
+function vwma(ohlcv, n) {
+  return ohlcv.map((_, i) => {
+    if (i < n - 1) return null;
+    const slice = ohlcv.slice(i - n + 1, i + 1);
+    const sumPV = slice.reduce((a, d) => a + d.close * (d.volume || 0), 0);
+    const sumV  = slice.reduce((a, d) => a + (d.volume || 0), 0);
+    return sumV === 0 ? null : sumPV / sumV;
+  });
+}
+
+function fibRetracements(high, low, current) {
+  const ratios = [0.236, 0.382, 0.5, 0.618, 0.786];
+  return ratios.map(r => {
+    const price = high - (high - low) * r;
+    return { level: r, price, pct: (price / current - 1) * 100 };
+  });
+}
+
+function fibExtensions(low, high, current) {
+  const ratios = [1.272, 1.414, 1.618, 2.0, 2.618];
+  return ratios.map(r => {
+    const price = low + (high - low) * r;
+    return { level: r, price, pct: (price / current - 1) * 100 };
+  });
+}
+
+function roundNumbers(price) {
+  if (!price || price <= 0) return [];
+  const mag = Math.pow(10, Math.floor(Math.log10(price)));
+  const steps = [mag * 0.1, mag * 0.25, mag * 0.5, mag, mag * 2];
+  const set = new Set();
+  steps.forEach(step => {
+    const base = Math.floor(price / step) * step;
+    for (let o = -3; o <= 4; o++) {
+      const v = Math.round((base + o * step) * 10000) / 10000;
+      if (v > 0) set.add(v);
+    }
+  });
+  const sorted = [...set].sort((a, b) => a - b);
+  const below = sorted.filter(v => v < price * 0.995).slice(-3);
+  const above = sorted.filter(v => v > price * 1.005).slice(0, 3);
+  return [...below, ...above].map(level => ({
+    level,
+    pct: (level / price - 1) * 100,
+    role: level < price ? '지지' : '저항',
+  }));
+}
+
+function computeTechIndicators(ohlcv) {
+  if (!ohlcv || ohlcv.length < 2) return null;
+  const closes = ohlcv.map(d => d.close);
+  const n = closes.length;
+  const last = v => Array.isArray(v) ? v[n - 1] : null;
+
+  const ma20  = last(movingAverage(closes, 20));
+  const ma30  = last(movingAverage(closes, 30));
+  const ma50  = last(movingAverage(closes, 50));
+  const ma99  = last(movingAverage(closes, 99));
+  const ma200 = last(movingAverage(closes, 200));
+
+  const vwma20v  = last(vwma(ohlcv, 20));
+  const vwma100v = last(vwma(ohlcv, 100));
+
+  const bbAll = bollingerBands(closes, 20, 2);
+  const bbLast = bbAll[n - 1];
+
+  const rsi14All = rsi(closes, 14);
+  const rsi14v   = rsi14All[n - 1];
+
+  const price = closes[n - 1];
+  const ohlcv90 = ohlcv.slice(-90);
+  const high90  = Math.max(...ohlcv90.map(d => d.high));
+  const low90   = Math.min(...ohlcv90.map(d => d.low));
+
+  const fibs    = fibRetracements(high90, low90, price);
+  const fibExts = fibExtensions(low90, high90, price);
+  const rounds  = roundNumbers(price);
+
+  // Trade plan
+  const entry1   = fibs[0].price; // Fib 0.236
+  const entry2   = fibs[1].price; // Fib 0.382
+  const stopRaw  = low90 * 0.97;  // just below 90d low
+  const profit1  = fibExts[0].price; // Ext 1.272
+  const profit2  = fibExts[2].price; // Ext 1.618
+  const profit3  = fibExts[4].price; // Ext 2.618
+  const rr1 = entry1 > stopRaw ? (profit1 - entry1) / (entry1 - stopRaw) : null;
+  const rr2 = entry1 > stopRaw ? (profit2 - entry1) / (entry1 - stopRaw) : null;
+  const rr3 = entry1 > stopRaw ? (profit3 - entry1) / (entry1 - stopRaw) : null;
+
+  return {
+    price,
+    ma: { ma20, ma30, ma50, ma99, ma200 },
+    vwma: { vwma20: vwma20v, vwma100: vwma100v },
+    bb: bbLast ? { upper: bbLast.upper, mid: bbLast.mid, lower: bbLast.lower } : null,
+    rsi14: rsi14v,
+    fib90: { high: high90, low: low90 },
+    fibs,
+    fibExts,
+    rounds,
+    tradePlan: { entry1, entry2, stopLoss: stopRaw, profit1, profit2, profit3, rr1, rr2, rr3 },
+  };
+}
+
 // ─── Ticker Resolution ────────────────────────────────────────────────────────
 function resolveTicker(query) {
   const q = query.trim().toLowerCase();
@@ -552,11 +656,44 @@ async function callGeminiVision(imageB64, mediaType, apiKey) {
   ], apiKey);
 }
 
-async function callGeminiReport(visionText, ticker, price, apiKey) {
+async function callGeminiReport(visionText, ticker, price, apiKey, computed) {
+  const fmt = v => v != null ? Number(v).toLocaleString(undefined,{maximumFractionDigits:4}) : 'N/A';
+  const fmtPct = v => v != null ? (v > 0 ? `+${v.toFixed(1)}%` : `${v.toFixed(1)}%`) : '';
+
+  let computedCtx = '';
+  if (computed) {
+    const {ma, vwma: vw, bb, rsi14, fibs, fibExts, tradePlan} = computed;
+    computedCtx = `
+[계산된 기술 지표]
+현재가: $${fmt(price)}
+RSI(14): ${rsi14 != null ? rsi14.toFixed(1) : 'N/A'}
+MA20: $${fmt(ma.ma20)} (${ma.ma20 && price ? (price > ma.ma20 ? '가격위↑' : '가격아래↓') : ''})
+MA50: $${fmt(ma.ma50)} (${ma.ma50 && price ? (price > ma.ma50 ? '가격위↑' : '가격아래↓') : ''})
+MA99: $${fmt(ma.ma99)} (${ma.ma99 && price ? (price > ma.ma99 ? '가격위↑' : '가격아래↓') : ''})
+MA200: $${fmt(ma.ma200)} (${ma.ma200 && price ? (price > ma.ma200 ? '가격위↑' : '가격아래↓') : ''})
+VWMA100: $${fmt(vw.vwma100)} (${vw.vwma100 && price ? (price > vw.vwma100 ? '세력 평단 초과' : '세력 평단 미달') : ''})
+BB상단: $${fmt(bb?.upper)} / BB중간: $${fmt(bb?.mid)} / BB하단: $${fmt(bb?.lower)}
+
+[피보나치 되돌림 (90일 저→고)]
+${fibs.map(f => `Fib ${f.level}: $${fmt(f.price)} (${fmtPct(f.pct)})`).join('\n')}
+
+[피보나치 확장 (상승 목표)]
+${fibExts.map(f => `Ext ${f.level}: $${fmt(f.price)} (${fmtPct(f.pct)})`).join('\n')}
+
+[매매 플랜]
+1차 진입: $${fmt(tradePlan.entry1)} (Fib 0.236)
+2차 진입: $${fmt(tradePlan.entry2)} (Fib 0.382)
+손절: $${fmt(tradePlan.stopLoss)}
+익절1: $${fmt(tradePlan.profit1)} (Ext 1.272, R:R=${tradePlan.rr1 != null ? tradePlan.rr1.toFixed(1)+'x' : 'N/A'})
+익절2: $${fmt(tradePlan.profit2)} (Ext 1.618, R:R=${tradePlan.rr2 != null ? tradePlan.rr2.toFixed(1)+'x' : 'N/A'})
+익절3: $${fmt(tradePlan.profit3)} (Ext 2.618, R:R=${tradePlan.rr3 != null ? tradePlan.rr3.toFixed(1)+'x' : 'N/A'})
+`;
+  }
+
   const prompt = `당신은 전문 퀀트 애널리스트입니다. 아래 기술적 분석 내용을 바탕으로 투자 리포트 JSON을 작성하세요.
 
 종목: ${ticker}  |  현재가: ${price ? '$'+price.toLocaleString() : '미확인'}
-
+${computedCtx}
 기술적 분석 내용:
 ${visionText}
 
@@ -646,12 +783,16 @@ async function analyzeFull(query, apiKey, onStep) {
     visionText = `종목: ${ticker}, 현재가: ${price}, 최근30일 종가: ${closes.slice(-10).map(v=>v?.toFixed(2)).join(', ')}, MA20: ${ma20v[ma20v.length-1]?.toFixed(2)||'N/A'}, RSI(14): ${lastRsi?.toFixed(1)||'N/A'}`;
   }
 
+  // Compute technical indicators from OHLCV
+  const computed = computeTechIndicators(ohlcv);
+
   step('report');
-  const report = await callGeminiReport(visionText, ticker, price, apiKey);
-  report.ticker = report.ticker || ticker;
-  report.price  = report.price  || price;
-  report.chartB64 = chartB64;
+  const report = await callGeminiReport(visionText, ticker, price, apiKey, computed);
+  report.ticker    = report.ticker || ticker;
+  report.price     = report.price  || price;
+  report.chartB64  = chartB64;
   report.visionText = visionText;
+  report.computed  = computed;
 
   return report;
 }
@@ -853,6 +994,160 @@ function InfoRow({label, value, color}) {
   );
 }
 
+// ─── Computed Indicator Components ───────────────────────────────────────────
+const fp = (v, digits=2) => v != null ? Number(v).toLocaleString(undefined, {maximumFractionDigits: digits}) : '—';
+const fmtPct = v => v != null ? (v >= 0 ? `+${v.toFixed(1)}%` : `${v.toFixed(1)}%`) : '';
+const pctColor = v => v == null ? '#94a3b8' : v >= 0 ? '#34d399' : '#f87171';
+
+function MaRow({label, maVal, price}) {
+  if (maVal == null) return null;
+  const above = price > maVal;
+  const pct = (price / maVal - 1) * 100;
+  return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #1e293b',fontSize:'.82rem'}}>
+      <span style={{color:'#94a3b8',minWidth:80}}>{label}</span>
+      <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>${fp(maVal)}</span>
+      <span style={{color: above ? '#34d399' : '#f87171', fontSize:'.78rem'}}>
+        {above ? '▲' : '▼'} {fmtPct(pct)}
+      </span>
+    </div>
+  );
+}
+
+function ComputedTechSection({computed}) {
+  if (!computed) return null;
+  const {ma, vwma: vw, bb, rsi14, price} = computed;
+
+  let rsiColor = '#fbbf24';
+  let rsiLabel = '중립';
+  if (rsi14 != null) {
+    if (rsi14 >= 70) { rsiColor = '#f87171'; rsiLabel = '과매수'; }
+    else if (rsi14 <= 30) { rsiColor = '#34d399'; rsiLabel = '과매도'; }
+  }
+
+  return (
+    <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
+      <div style={{fontSize:'.8rem',fontWeight:700,color:'#60a5fa',marginBottom:10}}>📐 계산된 기술 지표</div>
+
+      {/* RSI */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #1e293b',fontSize:'.82rem',marginBottom:4}}>
+        <span style={{color:'#94a3b8'}}>RSI(14)</span>
+        <span style={{color:rsiColor,fontWeight:700}}>{rsi14 != null ? rsi14.toFixed(1) : '—'}</span>
+        <span style={{color:rsiColor,fontSize:'.78rem'}}>{rsiLabel}</span>
+      </div>
+
+      {/* Moving Averages */}
+      <MaRow label="MA20"     maVal={ma.ma20}  price={price}/>
+      <MaRow label="MA50"     maVal={ma.ma50}  price={price}/>
+      <MaRow label="MA99"     maVal={ma.ma99}  price={price}/>
+      <MaRow label="MA200"    maVal={ma.ma200} price={price}/>
+      <MaRow label="VWMA100"  maVal={vw.vwma100} price={price}/>
+
+      {/* Bollinger Bands */}
+      {bb && (
+        <div style={{marginTop:6,fontSize:'.82rem'}}>
+          <div style={{color:'#64748b',marginBottom:4}}>볼린저밴드 (20,2)</div>
+          <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+            <span>상단 <b style={{color:'#f87171'}}>${fp(bb.upper)}</b></span>
+            <span>중간 <b style={{color:'#94a3b8'}}>${fp(bb.mid)}</b></span>
+            <span>하단 <b style={{color:'#34d399'}}>${fp(bb.lower)}</b></span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FibSection({computed}) {
+  if (!computed) return null;
+  const {fibs, fibExts, fib90, price, rounds} = computed;
+  return (
+    <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
+      <div style={{fontSize:'.8rem',fontWeight:700,color:'#a78bfa',marginBottom:10}}>
+        📐 피보나치 레벨 (90일 기준: 저 ${fp(fib90?.low)} / 고 ${fp(fib90?.high)})
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+        {/* Retracements */}
+        <div>
+          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>되돌림 (지지)</div>
+          {fibs.map(f => (
+            <div key={f.level} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1e293b20',fontSize:'.8rem'}}>
+              <span style={{color:'#94a3b8'}}>Fib {f.level}</span>
+              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>${fp(f.price)}</span>
+              <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Extensions */}
+        <div>
+          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>확장 (목표)</div>
+          {fibExts.map(f => (
+            <div key={f.level} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1e293b20',fontSize:'.8rem'}}>
+              <span style={{color:'#94a3b8'}}>Ext {f.level}</span>
+              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>${fp(f.price)}</span>
+              <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Round numbers */}
+      {rounds && rounds.length > 0 && (
+        <div style={{marginTop:10}}>
+          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>심리적 라운드넘버</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            {rounds.map(r => (
+              <span key={r.level} style={{
+                background: r.role === '저항' ? '#450a0a' : '#064e3b',
+                color: r.role === '저항' ? '#f87171' : '#34d399',
+                borderRadius:4, padding:'2px 8px', fontSize:'.78rem',
+              }}>
+                ${fp(r.level)} {fmtPct(r.pct)} ({r.role})
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradePlanSection({computed, report}) {
+  if (!computed?.tradePlan) return null;
+  const {tradePlan} = computed;
+  const pos = report?.position;
+
+  const Row = ({label, val, color, note}) => (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #1e293b',fontSize:'.83rem'}}>
+      <span style={{color:'#94a3b8',minWidth:90}}>{label}</span>
+      <span style={{color: color||'#e2e8f0',fontWeight:700,fontVariantNumeric:'tabular-nums'}}>${fp(val)}</span>
+      {note && <span style={{color:'#64748b',fontSize:'.75rem'}}>{note}</span>}
+    </div>
+  );
+
+  return (
+    <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
+      <div style={{fontSize:'.8rem',fontWeight:700,color:'#fbbf24',marginBottom:10}}>📋 매매 플랜</div>
+
+      <Row label="1차 진입"  val={tradePlan.entry1}   color="#34d399" note="Fib 0.236"/>
+      <Row label="2차 진입"  val={tradePlan.entry2}   color="#34d399" note="Fib 0.382"/>
+      <Row label="손절"      val={tradePlan.stopLoss} color="#f87171" note="90일 저점 -3%"/>
+      <Row label="익절 1차"  val={tradePlan.profit1}  color="#a78bfa"
+        note={`Ext 1.272 · RR ${tradePlan.rr1 != null ? tradePlan.rr1.toFixed(1)+'x' : '—'} · 40% 청산`}/>
+      <Row label="익절 2차"  val={tradePlan.profit2}  color="#a78bfa"
+        note={`Ext 1.618 · RR ${tradePlan.rr2 != null ? tradePlan.rr2.toFixed(1)+'x' : '—'} · 35% 청산`}/>
+      <Row label="익절 3차"  val={tradePlan.profit3}  color="#a78bfa"
+        note={`Ext 2.618 · RR ${tradePlan.rr3 != null ? tradePlan.rr3.toFixed(1)+'x' : '—'} · 25% 청산`}/>
+
+      <div style={{marginTop:8,fontSize:'.78rem',color:'#64748b',lineHeight:1.6}}>
+        ⚠️ 진입 트리거: 거래량 &gt; 14일 평균×1.5 · 일봉 양봉 마감 · RSI 30↑반등 확인 후 진입
+      </div>
+    </div>
+  );
+}
+
 function ReportCard({report, onSave}) {
   if(!report) return null;
   const badgeClass = report.position==='long'?'badge-green':report.position==='short'?'badge-red':'badge-yellow';
@@ -907,7 +1202,16 @@ function ReportCard({report, onSave}) {
         </div>
       )}
 
-      {/* 세부 분석 항목 */}
+      {/* 계산된 기술지표 (RSI / MA / BB) */}
+      <ComputedTechSection computed={report.computed}/>
+
+      {/* 피보나치 레벨 */}
+      <FibSection computed={report.computed}/>
+
+      {/* 매매 플랜 */}
+      <TradePlanSection computed={report.computed} report={report}/>
+
+      {/* AI 세부 분석 항목 */}
       <div style={{marginTop:4}}>
         <InfoRow label="📈 추세"         value={report.trend}/>
         <InfoRow label="📊 이동평균선"    value={report.ma_status}/>
