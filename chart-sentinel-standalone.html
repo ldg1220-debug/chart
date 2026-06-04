@@ -1766,6 +1766,33 @@ async function analyzeDirectly(query, apiKey) {
 const callClaudeVision = callGeminiVision;
 const callClaudeReport = callGeminiReport;
 
+// ─── Phase 1: Fast data + indicator fetch ────────────────────────────────────
+async function fetchAnalysisPhase1(query, mode='auto') {
+  // Resolve Korean name if needed
+  let {ticker, type} = resolveTicker(query, mode);
+  if (mode === 'crypto') {
+    try { ticker = await searchCoinId(query) || ticker; } catch {}
+  }
+  if (type === 'stock' && /[가-힣]/.test(ticker) && !ticker.includes('.')) {
+    try { const found = await searchKrTicker(ticker); if (found) ticker = found; } catch {}
+  }
+
+  const ohlcv = await fetchOHLCV(query, '6mo', mode);
+  if (!ohlcv || ohlcv.length < 10) throw new Error('데이터 부족');
+  const price = ohlcv[ohlcv.length-1]?.close;
+  const computed = computeTechIndicators(ohlcv);
+  return {ticker, type, ohlcv, price, computed};
+}
+
+// ─── Phase 2: Async AI analysis ──────────────────────────────────────────────
+async function fetchAnalysisPhase2(ticker, price, computed, apiKey) {
+  const report = await callGeminiCombined(null, ticker, price, apiKey, computed, '일봉');
+  report.ticker  = report.ticker  || ticker;
+  report.price   = report.price   || price;
+  report.computed = computed;
+  return report;
+}
+
 // ─── Full Analysis Pipeline ───────────────────────────────────────────────────
 async function analyzeFull(query, apiKey, onStep, mode='auto') {
   const steps = ['ticker','data','chart','vision','report'];
@@ -2727,6 +2754,8 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [step, setStep]     = useState('');
   const [report, setReport] = useState(null);
   const [error, setError]   = useState('');
+  const [phase1, setPhase1] = useState(null);   // immediate local data
+  const [aiLoading, setAiLoading] = useState(false);
   const [imgB64, setImgB64] = useState(null);
   const [imgType, setImgType] = useState(null);
   const [logs, setLogs]     = useState(()=>ls_get('cs_logs',[]));
@@ -2746,23 +2775,73 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
     return true;
   };
 
-  const handleAnalyze = async (q, forceMode) => {
-    const target = q || query;
-    if(!target.trim()) return;
-    if(!checkReady()) return;
-    const effectiveMode = forceMode || mode;
-    setLoading(true); setError(''); setReport(null);
+  async function handleAnalyze(queryVal, modeVal) {
+    const target = (queryVal||query).trim();
+    if (!target) return;
+    if (!checkReady()) return;
+    const effectiveMode = modeVal||mode;
+
+    setLoading(true);
+    setError('');
+    setReport(null);
+    setPhase1(null);
+
     try {
-      const r = await analyzeFull(target, apiKey, (s)=>setStep(s), effectiveMode);
-      setReport(r);
-      saveLog(r);
-      if(settings.autoAlert && r.confidence>=settings.alertThreshold) {
-        if(settings.telegramToken) sendTelegramAlert(r, settings).catch(()=>{});
-        if(settings.discordWebhook) sendDiscordAlert(r, settings).catch(()=>{});
+      // ── Phase 1: fast (data + local indicators) ─────────────────
+      setStep('ticker');
+      let p1;
+      try {
+        setStep('data');
+        p1 = await fetchAnalysisPhase1(target, effectiveMode);
+        setPhase1(p1);
+      } catch(e) {
+        // Data fetch failed → fall back to pure AI text analysis
+        setStep('report');
+        const r = await analyzeDirectly(target, apiKey);
+        r._dataError = `가격 데이터 수집 실패. 텍스트 기반 분석으로 대체합니다.`;
+        r._query = target;
+        setReport(r);
+        return;
+      } finally {
+        setLoading(false);
+        setStep('');
       }
-    } catch(e) { setError(e.message); }
-    finally { setLoading(false); setStep(''); }
-  };
+
+      // ── Phase 2: async AI analysis ───────────────────────────────
+      setAiLoading(true);
+      setStep('vision');
+      try {
+        const r = await fetchAnalysisPhase2(p1.ticker, p1.price, p1.computed, apiKey);
+        r._query = target;
+        setReport(r);
+        // Save to logs
+        const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary};
+        const prev = ls_get('cs_logs')||[];
+        ls_set('cs_logs', [...prev.slice(-99), entry]);
+        setLogs(prev => [...prev.slice(-99), entry]);
+        if(settings.autoAlert && r.confidence>=settings.alertThreshold) {
+          if(settings.telegramToken) sendTelegramAlert(r, settings).catch(()=>{});
+          if(settings.discordWebhook) sendDiscordAlert(r, settings).catch(()=>{});
+        }
+      } catch(e) {
+        console.error('AI 분석 실패:', e);
+        // Show partial report with local data only
+        setReport({
+          ticker: p1.ticker, price: p1.price, computed: p1.computed,
+          position:'hold', confidence:50, signals:[],
+          summary: 'AI 분석에 실패했습니다. 차트 데이터와 기술 지표를 참고하세요.',
+          _query: target, _aiError: true,
+        });
+      } finally {
+        setAiLoading(false);
+        setStep('');
+      }
+    } catch(e) {
+      setError(e.message||'분석 오류');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const handleImageAnalyze = async () => {
     if(!imgB64) return;
@@ -2835,27 +2914,64 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
               <div style={{width:100,height:40,background:'#1e293b',borderRadius:8,animation:'pulse 1.5s ease-in-out infinite'}}/>
             </div>
           </div>
-          <div className="card" style={{height:320,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12}}>
+          <div className="card" style={{height:200,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12}}>
             <div className="spinner"/>
             <div style={{color:'#475569',fontSize:'.85rem'}}>
-              {step==='ticker'?'🔍 종목 확인 중...':step==='data'?'📊 차트 데이터 수집 중...':step==='chart'?'🖼️ 차트 렌더링 중...':step==='vision'?'🤖 AI 차트 분석 중...':step==='report'?'📝 리포트 생성 중...':'분석 중...'}
+              {step==='ticker'?'🔍 종목 확인 중...':step==='data'?'📊 차트 데이터 수집 중...':'데이터 로딩 중...'}
             </div>
           </div>
         </div>
       )}
 
-      {report && !loading && (
+      {(phase1 || report) && !loading && (
         <>
-          <ReportHero report={report} onSave={()=>{}}/>
-          <InteractiveChart query={query||report.ticker} mode={mode} resolvedTicker={report.ticker}/>
-          {report.ticker && (
+          {/* Hero: show AI result if available, else placeholder */}
+          {report
+            ? <ReportHero report={report} onSave={()=>{}}/>
+            : <div className="card" style={{padding:'20px 22px',background:'linear-gradient(135deg,#0f172a 70%,#131f35)'}}>
+                <div style={{display:'flex',alignItems:'center',gap:14}}>
+                  <div style={{width:52,height:52,borderRadius:'50%',background:'linear-gradient(135deg,#334155,#475569)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.35rem',fontWeight:900,color:'#94a3b8',flexShrink:0}}>
+                    {((phase1?.ticker||'?')[0]).toUpperCase()}
+                  </div>
+                  <div>
+                    <div style={{fontSize:'1.75rem',fontWeight:900,color:'#f8fafc'}}>{(phase1?.ticker||'').toUpperCase()}</div>
+                    <div style={{fontSize:'1.45rem',fontWeight:700,color:'#e2e8f0',fontFamily:'monospace',marginTop:4}}>
+                      {phase1?.price?`$${phase1.price.toLocaleString(undefined,{maximumFractionDigits:4})}`:'—'}
+                    </div>
+                    <div style={{fontSize:'.82rem',color:'#475569',marginTop:4,display:'flex',alignItems:'center',gap:8}}>
+                      <div className="spinner" style={{width:14,height:14,borderWidth:2}}/>
+                      AI 분석 중...
+                    </div>
+                  </div>
+                </div>
+              </div>
+          }
+
+          <InteractiveChart query={query||phase1?.ticker||report?.ticker} mode={mode} resolvedTicker={phase1?.ticker||report?.ticker}/>
+
+          {(phase1?.ticker||report?.ticker) && (
             <div className="card" style={{padding:'12px 16px'}}>
               <div className="card-title" style={{marginBottom:8}}>📺 TradingView</div>
-              <TradingViewWidget ticker={report.ticker} query={report._query||query}/>
+              <TradingViewWidget ticker={phase1?.ticker||report?.ticker} query={report?._query||query}/>
             </div>
           )}
-          <AnalysisSection report={report}/>
-          <ConclusionSection report={report}/>
+
+          <AnalysisSection report={report || {
+            ticker: phase1?.ticker, price: phase1?.price, computed: phase1?.computed,
+            position:'hold', confidence:50,
+          }}/>
+
+          {/* Conclusion: show spinner while AI loads, result when done */}
+          {aiLoading && (
+            <div className="card">
+              <div className="card-title">💡 AI 투자 의견</div>
+              <div style={{display:'flex',alignItems:'center',gap:12,padding:'16px 0',color:'#475569',fontSize:'.88rem'}}>
+                <div className="spinner"/>
+                <span>🤖 Gemini AI 심층 분석 중... (10~20초 소요)</span>
+              </div>
+            </div>
+          )}
+          {!aiLoading && report && <ConclusionSection report={report}/>}
         </>
       )}
 
