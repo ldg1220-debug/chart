@@ -875,15 +875,33 @@ async function fetchViaProxies(yfUrl) {
 }
 
 async function fetchYahooOHLCV(ticker, range='6mo', interval='1d') {
-  const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${interval}&includePrePost=false&events=div%2Csplit`;
-  const data = await fetchViaProxies(yfUrl);
-  if(data) return parseYahooResponse(data);
+  const isKorean = /\.(ks|kq)$/i.test(ticker);
 
-  // 분봉/시간봉은 Stooq 폴백 불가 (일봉만 지원) — 에러를 그대로 올려서 UI에 표시
-  if(interval !== '1d' && interval !== '1wk' && interval !== '1mo') {
-    throw new Error(`${ticker} 분봉/시간봉 데이터를 가져올 수 없습니다.\n브라우저 CORS 제한으로 주식 단기 봉은 직접 접근이 어렵습니다.\n일봉(1d) / 주봉 / 월봉을 사용해주세요.`);
+  // 한국 주식 분봉/시간봉 — 무료 공개 API로 인트라데이 불가
+  if (isKorean && interval !== '1d' && interval !== '1wk' && interval !== '1mo') {
+    throw new Error(`한국 주식은 일봉/주봉/월봉만 지원됩니다. (분봉·시간봉 데이터는 무료 API 미제공)`);
   }
-  // 일봉/주봉/월봉은 Stooq 폴백
+
+  const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${interval}&includePrePost=false&events=div%2Csplit`;
+
+  // 한국 주식: Yahoo 프록시 + Stooq 동시 경쟁 → 먼저 오는 것 사용
+  if (isKorean) {
+    const yahooP = fetchViaProxies(yfUrl).then(d => {
+      if (!d) throw new Error('Yahoo 없음');
+      return parseYahooResponse(d);
+    });
+    const stooqP = fetchStooq(ticker, range);
+    try { return await Promise.any([yahooP, stooqP]); }
+    catch { throw new Error(`${ticker}: 데이터를 가져올 수 없습니다. 티커를 확인해주세요 (예: 005930.KS)`); }
+  }
+
+  // 미국/글로벌 주식: Yahoo 우선, 실패 시 Stooq
+  const data = await fetchViaProxies(yfUrl);
+  if (data) return parseYahooResponse(data);
+
+  if (interval !== '1d' && interval !== '1wk' && interval !== '1mo') {
+    throw new Error(`${ticker} 분봉/시간봉 데이터를 가져올 수 없습니다. 일봉(1D)/주봉/월봉을 사용해주세요.`);
+  }
   return fetchStooq(ticker, range);
 }
 
@@ -2658,11 +2676,18 @@ function TradingViewWidget({ticker, query=''}) {
 
 // ─── Interactive Chart Component ─────────────────────────────────────────────
 function InteractiveChart({query, mode, resolvedTicker}) {
+  // 한국 주식 감지: .KS / .KQ 티커 또는 KR_TICKER_MAP 값인 경우 인트라데이 미지원
+  const isKrStock = /\.(ks|kq)$/i.test(resolvedTicker||query||'');
   const [tf, setTf]       = useState('1d');
   const [ohlcv, setOhlcv] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const containerRef = useRef();
+
+  // 한국 주식으로 전환 시 인트라데이 탭이 선택돼 있으면 일봉으로 리셋
+  useEffect(() => {
+    if (isKrStock && tf !== '1d' && tf !== '1w' && tf !== '1M') setTf('1d');
+  }, [isKrStock]);
 
   useEffect(() => {
     if (!query) return;
@@ -2686,17 +2711,24 @@ function InteractiveChart({query, mode, resolvedTicker}) {
     <div className="card" style={{marginBottom:16}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}}>
         <div style={{fontWeight:700,color:'#94a3b8',fontSize:'.9rem'}}>📊 인터랙티브 차트 — {resolvedTicker||query}</div>
-        <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>
-          {TIMEFRAMES.map(t=>(
-            <button key={t.id}
-              onClick={()=>setTf(t.id)}
-              style={{
-                padding:'3px 10px',borderRadius:5,fontSize:'.78rem',fontWeight:600,
-                border:'none',cursor:'pointer',transition:'all .15s',
-                background:tf===t.id?'linear-gradient(135deg,#3b82f6,#6366f1)':'#1e293b',
-                color:tf===t.id?'#fff':'#64748b',
-              }}>{t.label}</button>
-          ))}
+        <div style={{display:'flex',gap:3,flexWrap:'wrap',alignItems:'center'}}>
+          {TIMEFRAMES.map(t=>{
+            const disabled = isKrStock && t.id !== '1d' && t.id !== '1w' && t.id !== '1M';
+            return (
+              <button key={t.id}
+                onClick={()=>!disabled && setTf(t.id)}
+                title={disabled ? '한국 주식은 일봉/주봉/월봉만 지원' : ''}
+                style={{
+                  padding:'3px 10px',borderRadius:5,fontSize:'.78rem',fontWeight:600,
+                  border:'none',transition:'all .15s',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.3 : 1,
+                  background:tf===t.id?'linear-gradient(135deg,#3b82f6,#6366f1)':'#1e293b',
+                  color:tf===t.id?'#fff':'#64748b',
+                }}>{t.label}</button>
+            );
+          })}
+          {isKrStock && <span style={{fontSize:'.72rem',color:'#475569',marginLeft:4}}>일/주/월봉만 지원</span>}
         </div>
       </div>
       {loading && (
