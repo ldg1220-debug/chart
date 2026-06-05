@@ -1,24 +1,28 @@
 import asyncio
 import base64
 import csv
+import html as html_lib
 import json
 import os
 import io
+import smtplib
+from email.mime.text import MIMEText
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 from anthropic import AsyncAnthropic
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, BackgroundTasks
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from plotly.subplots import make_subplots
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── 환경변수 ──────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
@@ -26,6 +30,20 @@ FMP_API_KEY        = os.getenv("FMP_API_KEY", "")
 FRED_API_KEY       = os.getenv("FRED_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+SMTP_HOST          = os.getenv("SMTP_HOST", "smtp.gmail.com")
+try:
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+except (ValueError, TypeError):
+    SMTP_PORT = 587
+SMTP_USER          = os.getenv("SMTP_USER", "")
+SMTP_PASS          = os.getenv("SMTP_PASS", "")
+ALERT_EMAIL        = os.getenv("ALERT_EMAIL", "")
+try:
+    ALERT_MIN_CONFIDENCE = int(os.getenv("ALERT_MIN_CONFIDENCE", "7"))
+except (ValueError, TypeError):
+    ALERT_MIN_CONFIDENCE = 7
+PORTFOLIO_FILE     = Path("portfolio.json")
 
 SONNET_MODEL = "claude-sonnet-4-20250514"
 OPUS_MODEL   = "claude-opus-4-20250514"
@@ -81,7 +99,7 @@ def resolve_ticker(query: str) -> tuple[str, str]:
 
 # ── 데이터 수집 ───────────────────────────────────────────────────────────────
 async def _run_in_executor(fn, *args):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, fn, *args)
 
 
@@ -97,7 +115,10 @@ async def fetch_stock_data(ticker: str, period: str = "3mo") -> pd.DataFrame:
         try:
             df = await _run_in_executor(_fetch_yf, ticker, period)
             if df is None or df.empty:
-                raise ValueError(f"No data returned for {ticker}")
+                raise ValueError(
+                    f"'{ticker}'에 대한 데이터가 없습니다. "
+                    "종목 코드를 확인하거나 상장폐지된 종목일 수 있습니다."
+                )
             return df
         except Exception as e:
             last_exc = e
@@ -106,16 +127,34 @@ async def fetch_stock_data(ticker: str, period: str = "3mo") -> pd.DataFrame:
     raise HTTPException(status_code=502, detail=f"Failed to fetch data for {ticker}: {last_exc}")
 
 
+async def _coingecko_get(url: str, params: dict, timeout: int = 15) -> dict | list:
+    """CoinGecko GET with 429 rate-limit retry (max 3회, backoff 최대 60s)."""
+    for attempt in range(3):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 429:
+                    wait = min(int(resp.headers.get("Retry-After", 30)) , 60)
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                if attempt == 2:
+                    raise HTTPException(status_code=502, detail=f"CoinGecko HTTP error: {e}")
+                await asyncio.sleep(2 ** attempt)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"CoinGecko error: {e}")
+    raise HTTPException(status_code=429, detail="CoinGecko rate limit — 잠시 후 다시 시도하세요")
+
+
 async def fetch_crypto_ohlcv(coin_id: str, days: int = 90) -> pd.DataFrame:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
-    params = {"vs_currency": "usd", "days": days}
-    async with httpx.AsyncClient(timeout=15) as client:
-        try:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"CoinGecko error: {e}")
+    data = await _coingecko_get(url, {"vs_currency": "usd", "days": days})
+    if not data:
+        raise HTTPException(status_code=404, detail=f"'{coin_id}' OHLCV 데이터가 없습니다. 코인 ID를 확인하세요.")
     rows = [{"Date": datetime.fromtimestamp(r[0] / 1000),
              "Open": r[1], "High": r[2], "Low": r[3], "Close": r[4]} for r in data]
     df = pd.DataFrame(rows).set_index("Date")
@@ -124,15 +163,14 @@ async def fetch_crypto_ohlcv(coin_id: str, days: int = 90) -> pd.DataFrame:
 
 
 async def fetch_crypto_price(coin_id: str) -> float:
-    url = f"https://api.coingecko.com/api/v3/simple/price"
-    params = {"ids": coin_id, "vs_currencies": "usd"}
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json().get(coin_id, {}).get("usd", 0.0)
-        except Exception:
-            return 0.0
+    try:
+        data = await _coingecko_get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            {"ids": coin_id, "vs_currencies": "usd"}, timeout=10
+        )
+        return data.get(coin_id, {}).get("usd", 0.0)
+    except Exception:
+        return 0.0
 
 
 async def fetch_news(ticker: str) -> tuple[list[dict], str]:
@@ -247,7 +285,7 @@ def _build_chart(df: pd.DataFrame, ticker: str) -> bytes:
 
 
 async def generate_chart(df: pd.DataFrame, ticker: str) -> bytes:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, _build_chart, df, ticker)
 
 
@@ -397,7 +435,7 @@ async def send_telegram_alert(report: dict) -> None:
         confidence = int(confidence)
     except (ValueError, TypeError):
         confidence = 0
-    if confidence < 7:
+    if confidence < ALERT_MIN_CONFIDENCE:
         return
 
     text = (
@@ -428,7 +466,7 @@ def _ensure_log_file():
             csv.DictWriter(f, fieldnames=LOG_COLUMNS).writeheader()
 
 
-def append_analysis_log(report: dict) -> None:
+async def append_analysis_log(report: dict) -> None:
     _ensure_log_file()
     strategy = report.get("strategy", {})
     row = {
@@ -445,8 +483,9 @@ def append_analysis_log(report: dict) -> None:
         "timeframe": report.get("timeframe", ""),
         "result": "pending",
     }
-    with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
-        csv.DictWriter(f, fieldnames=LOG_COLUMNS).writerow(row)
+    async with _csv_lock:
+        with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=LOG_COLUMNS).writerow(row)
 
 
 async def get_performance_stats() -> dict:
@@ -506,9 +545,67 @@ async def update_log_result(log_id: str, result: str) -> bool:
     return updated
 
 
+def _parse_price(price_str: str) -> Optional[float]:
+    """
+    "150.5", "$1,234.56", "150-160" (범위면 하한), "N/A" → float 또는 None
+    """
+    if not price_str or price_str in ("-", "N/A", ""):
+        return None
+    # 범위 표현 (예: "150-160") → 하한 사용
+    s = str(price_str).replace(",", "").replace("$", "").strip()
+    if "-" in s:
+        s = s.split("-")[0].strip()
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _analyze_single_for_compare(q: str) -> dict:
+    """비교용 단일 종목 분석 (chart_image 포함, 에러 시 오류 dict 반환)"""
+    try:
+        ticker, asset_type = resolve_ticker(q)
+        if asset_type == "crypto":
+            df = await fetch_crypto_ohlcv(ticker)
+            current_price = str(await fetch_crypto_price(ticker))
+        else:
+            df = await fetch_stock_data(ticker)
+            cp = df["Close"].squeeze().iloc[-1]
+            current_price = f"{cp:,.2f}"
+
+        img_bytes, (news_list, _), (macro_data, _) = await asyncio.gather(
+            generate_chart(df, ticker),
+            fetch_news(ticker),
+            fetch_macro(),
+        )
+        vision_text = await analyze_chart_vision(img_bytes)
+        report = await generate_report(vision_text, news_list, macro_data, ticker, current_price)
+
+        # 수익률 계산 (3개월 기준)
+        try:
+            closes = df["Close"].squeeze().dropna()
+            perf_3m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0] * 100)
+        except Exception:
+            perf_3m = 0.0
+
+        return {
+            "ticker": ticker,
+            "query": q,
+            "report": report,
+            "chart_image": base64.standard_b64encode(img_bytes).decode(),
+            "perf_3m": round(perf_3m, 2),
+            "error": None,
+        }
+    except Exception as e:
+        return {"ticker": q.upper(), "query": q, "report": None,
+                "chart_image": None, "perf_3m": 0.0, "error": str(e)}
+
+
 # ── 워치리스트 & 모니터 ───────────────────────────────────────────────────────
 watchlist_data: list[dict] = []
 monitor_tasks: dict[str, asyncio.Task] = {}
+_watchlist_lock = asyncio.Lock()
+_portfolio_lock = asyncio.Lock()
 
 
 def _load_watchlist():
@@ -530,9 +627,9 @@ app = FastAPI(title="Chart Sentinel API", version="4.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Api-Key"],
 )
 
 
@@ -614,12 +711,12 @@ async def analyze_full(q: str = Query(..., description="종목 검색어 (한글
 
     # 5. 로깅
     try:
-        append_analysis_log(report)
+        await append_analysis_log(report)
     except Exception:
         pass
 
     # 6. Telegram
-    asyncio.create_task(send_telegram_alert(report))
+    asyncio.create_task(send_all_alerts(report))
 
     chart_b64 = base64.standard_b64encode(img_bytes).decode()
     return {"report": report, "chart_image": chart_b64}
@@ -636,11 +733,11 @@ async def analyze_image(
     report = await generate_report(vision_text, [], {}, "UNKNOWN", "N/A", api_key)
 
     try:
-        append_analysis_log(report)
+        await append_analysis_log(report)
     except Exception:
         pass
 
-    asyncio.create_task(send_telegram_alert(report))
+    asyncio.create_task(send_all_alerts(report))
     chart_b64 = base64.standard_b64encode(img_bytes).decode()
     return {"report": report, "chart_image": chart_b64}
 
@@ -650,7 +747,7 @@ async def analyze_text(body: TextAnalysisRequest):
     vision_text = f"종목: {body.ticker}\n{body.price_data}\n{body.notes}"
     report = await generate_report(vision_text, [], {}, body.ticker, "N/A", body.api_key or "")
     try:
-        append_analysis_log(report)
+        await append_analysis_log(report)
     except Exception:
         pass
     return {"report": report}
@@ -700,16 +797,18 @@ async def get_watchlist():
 async def add_to_watchlist(item: WatchlistItem):
     ticker, _ = resolve_ticker(item.ticker)
     entry = {"ticker": ticker, "name": item.name or ticker, "added_at": datetime.utcnow().isoformat()}
-    watchlist_data.append(entry)
-    _save_watchlist()
+    async with _watchlist_lock:
+        watchlist_data.append(entry)
+        _save_watchlist()
     return {"watchlist": watchlist_data}
 
 
 @app.delete("/api/watchlist/{ticker}")
 async def remove_from_watchlist(ticker: str):
     global watchlist_data
-    watchlist_data = [w for w in watchlist_data if w["ticker"] != ticker.upper()]
-    _save_watchlist()
+    async with _watchlist_lock:
+        watchlist_data = [w for w in watchlist_data if w["ticker"] != ticker.upper()]
+        _save_watchlist()
     return {"watchlist": watchlist_data}
 
 
@@ -728,8 +827,8 @@ async def _monitor_loop(interval_minutes: int):
                 img_bytes = await generate_chart(df, ticker)
                 vision_text = await analyze_chart_vision(img_bytes)
                 report = await generate_report(vision_text, [], {}, ticker, current_price)
-                append_analysis_log(report)
-                await send_telegram_alert(report)
+                await append_analysis_log(report)
+                await send_all_alerts(report)
             except Exception:
                 continue
 
@@ -755,10 +854,592 @@ async def monitor_stop():
     return {"status": "not_running"}
 
 
+@app.get("/api/compare")
+async def compare_tickers(tickers: str = Query(..., description="쉼표 구분 종목 (예: AAPL,NVDA,TSLA, 최대 3개)")):
+    """여러 종목을 동시에 분석하고 비교합니다."""
+    ticker_list = [t.strip() for t in tickers.split(",") if t.strip()][:3]
+    if len(ticker_list) < 2:
+        raise HTTPException(status_code=422, detail="최소 2개 종목이 필요합니다")
+
+    results = await asyncio.gather(*[_analyze_single_for_compare(q) for q in ticker_list])
+    results = list(results)
+
+    # 상대 강도: 3개월 수익률 기준 순위
+    valid = [(i, r["perf_3m"]) for i, r in enumerate(results) if r["error"] is None]
+    valid_sorted = sorted(valid, key=lambda x: x[1], reverse=True)
+    ranks = {i: rank + 1 for rank, (i, _) in enumerate(valid_sorted)}
+
+    for i, r in enumerate(results):
+        r["relative_rank"] = ranks.get(i, None)
+
+    # 성과 로깅
+    for r in results:
+        if r["report"]:
+            try:
+                await append_analysis_log(r["report"])
+            except Exception:
+                pass
+
+    return {
+        "results": results,
+        "summary": {
+            "tickers": [r["ticker"] for r in results],
+            "best_performer": results[valid_sorted[0][0]]["ticker"] if valid_sorted else None,
+            "worst_performer": results[valid_sorted[-1][0]]["ticker"] if valid_sorted else None,
+        },
+    }
+
+
+@app.get("/api/performance/auto-evaluate")
+async def auto_evaluate_performance():
+    """
+    분석 후 5일 이상 경과한 pending 항목을 자동으로 win/loss 판정합니다.
+    판정 기준:
+    - 현재가 >= target_prices[0]: win
+    - 현재가 <= stop_loss: loss
+    - 그 외: 아직 pending 유지 (max 20일 후 자동 loss)
+    """
+    _ensure_log_file()
+
+    # 1단계: 평가 대상 행 식별 (락 없이 스냅샷 읽기)
+    async with _csv_lock:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            snapshot = list(csv.DictReader(f))
+
+    now = datetime.utcnow()
+    # 평가 대상: (row_id, ticker, days_elapsed, targets_raw, stop_raw, entry_raw)
+    candidates = []
+    for row in snapshot:
+        if row.get("result") != "pending":
+            continue
+        try:
+            ts = datetime.fromisoformat(row["timestamp"])
+        except Exception:
+            continue
+        days_elapsed = (now - ts).days
+        if days_elapsed < 5:
+            continue
+        ticker = row.get("ticker", "")
+        if not ticker:
+            continue
+        candidates.append((row["id"], ticker, days_elapsed,
+                           row.get("target_prices", "[]"),
+                           row.get("stop_loss", ""),
+                           row.get("entry_zone", "")))
+
+    # 2단계: 고유 티커 현재가 병렬 조회 (락 불필요, 읽기 전용)
+    unique_tickers = list({c[1] for c in candidates})
+    async def _fetch_price(ticker: str) -> tuple[str, float]:
+        try:
+            sym, atype = resolve_ticker(ticker)
+            if atype == "crypto":
+                return ticker, await fetch_crypto_price(sym)
+            df = await fetch_stock_data(sym, period="5d")
+            return ticker, float(df["Close"].squeeze().iloc[-1])
+        except Exception:
+            return ticker, 0.0
+
+    price_results = await asyncio.gather(*[_fetch_price(t) for t in unique_tickers])
+    price_map = {ticker: price for ticker, price in price_results}
+
+    # 3단계: 판정 결과 계산
+    decisions: dict[str, str] = {}  # row_id → new_result
+    evaluated = []
+    for row_id, ticker, days_elapsed, targets_raw, stop_raw, entry_raw in candidates:
+        current = price_map.get(ticker, 0.0)
+        if current == 0.0:
+            continue
+
+        try:
+            targets = json.loads(targets_raw)
+        except Exception:
+            targets = []
+
+        target1 = _parse_price(targets[0]) if targets else None
+        stop    = _parse_price(stop_raw)
+        entry   = _parse_price(entry_raw)
+
+        new_result = None
+        if days_elapsed >= 20:
+            new_result = "win" if (entry and current > entry * 1.02) else "loss"
+        elif target1 and current >= target1:
+            new_result = "win"
+        elif stop and current <= stop:
+            new_result = "loss"
+
+        if new_result:
+            decisions[row_id] = new_result
+            evaluated.append({
+                "ticker": ticker,
+                "days_elapsed": days_elapsed,
+                "result": new_result,
+                "current_price": current,
+                "target": target1,
+                "stop": stop,
+            })
+
+    # 4단계: 락 획득 후 최신 CSV를 다시 읽어 결정 반영 → 원자적 쓰기 (TOCTOU 방지)
+    updated_count = 0
+    if decisions:
+        async with _csv_lock:
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            for row in rows:
+                if row["id"] in decisions:
+                    row["result"] = decisions[row["id"]]
+                    updated_count += 1
+            with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=LOG_COLUMNS)
+                w.writeheader()
+                w.writerows(rows)
+
+    stats = await get_performance_stats()
+    return {
+        "evaluated_count": updated_count,
+        "evaluated": evaluated,
+        "stats": stats,
+    }
+
+
 @app.get("/api/macro")
 async def get_macro():
     data, err = await fetch_macro()
     return {"macro": data, "error": err}
+
+
+# ── P3-1: 알림 확장 (Discord / Email) ────────────────────────────────────────
+async def send_discord_alert(report: dict) -> None:
+    if not DISCORD_WEBHOOK_URL:
+        return
+    strategy = report.get("strategy", {})
+    position   = str(strategy.get("position", "")).lower()
+    try:
+        confidence = int(strategy.get("confidence", 0) or 0)
+    except (ValueError, TypeError):
+        confidence = 0
+    if position not in ("매수", "buy", "long") or confidence < ALERT_MIN_CONFIDENCE:
+        return
+
+    color = 0x22c55e  # green
+    embed = {
+        "title": f"🚨 Chart Sentinel — {report.get('ticker')} 매수 신호",
+        "color": color,
+        "fields": [
+            {"name": "종목", "value": f"{report.get('name')} ({report.get('ticker')})", "inline": True},
+            {"name": "현재가", "value": str(report.get("current_price", "N/A")), "inline": True},
+            {"name": "확신도", "value": f"{confidence}/10", "inline": True},
+            {"name": "진입", "value": strategy.get("entry_zone", "-"), "inline": True},
+            {"name": "목표", "value": ", ".join(strategy.get("target_prices", ["-"])), "inline": True},
+            {"name": "손절", "value": strategy.get("stop_loss", "-"), "inline": True},
+            {"name": "전략 근거", "value": (strategy.get("rationale", "-") or "-")[:1024]},
+        ],
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            await client.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]})
+        except Exception:
+            pass
+
+
+def _send_email_sync(subject: str, body: str) -> None:
+    msg = MIMEText(body, "html", "utf-8")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = ALERT_EMAIL
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(SMTP_USER, SMTP_PASS)
+        s.send_message(msg)
+
+
+async def send_email_alert(report: dict) -> None:
+    if not (SMTP_USER and SMTP_PASS and ALERT_EMAIL):
+        return
+    strategy   = report.get("strategy", {})
+    position   = str(strategy.get("position", "")).lower()
+    try:
+        confidence = int(strategy.get("confidence", 0) or 0)
+    except (ValueError, TypeError):
+        confidence = 0
+    if position not in ("매수", "buy", "long") or confidence < ALERT_MIN_CONFIDENCE:
+        return
+
+    esc = html_lib.escape
+    subject = f"[Chart Sentinel] {report.get('ticker')} 매수 신호 (확신도 {confidence}/10)"
+    body = f"""
+<h2>🛡 Chart Sentinel 매수 신호</h2>
+<table style="border-collapse:collapse;font-family:sans-serif">
+  <tr><td style="padding:6px 12px;color:#666">종목</td><td style="padding:6px 12px"><b>{esc(str(report.get('name','')))} ({esc(str(report.get('ticker','')))})</b></td></tr>
+  <tr><td style="padding:6px 12px;color:#666">현재가</td><td style="padding:6px 12px">{esc(str(report.get('current_price', 'N/A')))}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">확신도</td><td style="padding:6px 12px"><b style="color:#22c55e">{confidence}/10</b></td></tr>
+  <tr><td style="padding:6px 12px;color:#666">진입 구간</td><td style="padding:6px 12px">{esc(str(strategy.get('entry_zone', '-')))}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">목표가</td><td style="padding:6px 12px">{esc(', '.join(strategy.get('target_prices', ['-'])))}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">손절</td><td style="padding:6px 12px">{esc(str(strategy.get('stop_loss', '-')))}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">R/R</td><td style="padding:6px 12px">{esc(str(strategy.get('risk_reward', '-')))}</td></tr>
+  <tr><td style="padding:6px 12px;color:#666">근거</td><td style="padding:6px 12px">{esc(str(strategy.get('rationale', '') or ''))}</td></tr>
+</table>
+"""
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(executor, _send_email_sync, subject, body)
+    except Exception:
+        pass
+
+
+# P3-1 통합 알림 발송
+async def send_all_alerts(report: dict) -> None:
+    await asyncio.gather(
+        send_telegram_alert(report),
+        send_discord_alert(report),
+        send_email_alert(report),
+        return_exceptions=True,
+    )
+
+
+@app.get("/api/alerts/config")
+async def get_alert_config():
+    return {
+        "telegram": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        "discord":  bool(DISCORD_WEBHOOK_URL),
+        "email":    bool(SMTP_USER and SMTP_PASS and ALERT_EMAIL),
+        "min_confidence": ALERT_MIN_CONFIDENCE,
+    }
+
+
+@app.post("/api/alerts/test")
+async def test_alerts():
+    """설정된 모든 알림 채널로 테스트 메시지 발송."""
+    dummy = {
+        "ticker": "TEST", "name": "테스트 종목", "current_price": "100.00",
+        "strategy": {
+            "position": "매수", "confidence": 10,
+            "entry_zone": "99~101", "stop_loss": "95",
+            "target_prices": ["110", "120"], "risk_reward": "2:1",
+            "rationale": "Chart Sentinel 알림 테스트입니다.",
+        },
+    }
+    await send_all_alerts(dummy)
+    return {"sent": True}
+
+
+# ── P3-2: 백테스팅 ────────────────────────────────────────────────────────────
+def _run_backtest(df: pd.DataFrame, ticker: str) -> dict:
+    """
+    MA20/MA60 크로스오버 전략 시뮬레이션.
+    - 골든크로스 (MA20 > MA60): 매수 시그널 → 다음 날 시가에 진입
+    - 데드크로스  (MA20 < MA60): 청산 → 다음 날 시가에 매도
+    """
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    close  = df["Close"].squeeze().dropna()
+    opens  = df["Open"].squeeze().dropna()
+    ma20   = close.rolling(20).mean()
+    ma60   = close.rolling(60).mean()
+
+    trades: list[dict] = []
+    position = None  # {"entry_date", "entry_price", "signal_date"}
+
+    dates = close.index.tolist()
+    for i in range(1, len(dates)):
+        d     = dates[i]
+        prev  = dates[i - 1]
+        price = opens.get(d, close.iloc[i])
+
+        prev_20 = ma20.get(prev)
+        prev_60 = ma60.get(prev)
+        cur_20  = ma20.get(d)
+        cur_60  = ma60.get(d)
+
+        if None in (prev_20, prev_60, cur_20, cur_60):
+            continue
+        if pd.isna(prev_20) or pd.isna(prev_60) or pd.isna(cur_20) or pd.isna(cur_60):
+            continue
+
+        golden = (prev_20 <= prev_60) and (cur_20 > cur_60)
+        dead   = (prev_20 >= prev_60) and (cur_20 < cur_60)
+
+        if golden and position is None:
+            position = {"entry_date": str(d.date()), "entry_price": float(price)}
+        elif dead and position is not None:
+            exit_price = float(price)
+            ret = (exit_price - position["entry_price"]) / position["entry_price"] * 100
+            trades.append({
+                "entry_date": position["entry_date"],
+                "exit_date":  str(d.date()),
+                "entry_price": round(position["entry_price"], 4),
+                "exit_price":  round(exit_price, 4),
+                "return_pct":  round(ret, 2),
+                "result": "win" if ret > 0 else "loss",
+            })
+            position = None
+
+    # 미청산 포지션 마감
+    if position is not None and len(close) > 0:
+        exit_price = float(close.iloc[-1])
+        ret = (exit_price - position["entry_price"]) / position["entry_price"] * 100
+        trades.append({
+            "entry_date": position["entry_date"],
+            "exit_date":  "보유 중",
+            "entry_price": round(position["entry_price"], 4),
+            "exit_price":  round(exit_price, 4),
+            "return_pct":  round(ret, 2),
+            "result": "open",
+        })
+
+    wins       = [t for t in trades if t["result"] == "win"]
+    losses     = [t for t in trades if t["result"] == "loss"]
+    total_ret  = sum(t["return_pct"] for t in trades if t["result"] != "open")
+    win_rate   = round(len(wins) / max(len([t for t in trades if t["result"] != "open"]), 1) * 100, 1)
+    avg_win    = round(sum(t["return_pct"] for t in wins) / max(len(wins), 1), 2)
+    avg_loss   = round(sum(t["return_pct"] for t in losses) / max(len(losses), 1), 2)
+
+    hold_ret = 0.0
+    if len(close) >= 2:
+        hold_ret = round((float(close.iloc[-1]) - float(close.iloc[0])) / float(close.iloc[0]) * 100, 2)
+
+    return {
+        "ticker": ticker,
+        "strategy": "MA20/MA60 크로스오버",
+        "period_days": len(close),
+        "total_trades": len([t for t in trades if t["result"] != "open"]),
+        "win_rate": win_rate,
+        "total_return_pct": round(total_ret, 2),
+        "avg_win_pct": avg_win,
+        "avg_loss_pct": avg_loss,
+        "buy_and_hold_pct": hold_ret,
+        "excess_return_pct": round(total_ret - hold_ret, 2),
+        "trades": trades[-20:],  # 최근 20건
+    }
+
+
+@app.get("/api/backtest")
+async def backtest(
+    ticker: str = Query(...),
+    period: str = Query("6mo", description="1mo / 3mo / 6mo / 1y / 2y"),
+):
+    sym, asset_type = resolve_ticker(ticker)
+    if asset_type == "crypto":
+        days_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730}
+        df = await fetch_crypto_ohlcv(sym, days=days_map.get(period, 180))
+    else:
+        df = await fetch_stock_data(sym, period=period)
+
+    result = await _run_in_executor(_run_backtest, df, sym)
+    return result
+
+
+# ── P3-3: 포트폴리오 ──────────────────────────────────────────────────────────
+portfolio_data: list[dict] = []
+
+
+def _load_portfolio():
+    global portfolio_data
+    if PORTFOLIO_FILE.exists():
+        try:
+            portfolio_data = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            portfolio_data = []
+
+
+def _save_portfolio_sync():
+    PORTFOLIO_FILE.write_text(json.dumps(portfolio_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def _save_portfolio():
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(executor, _save_portfolio_sync)
+
+
+class PortfolioItem(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    shares: float = Field(gt=0)
+    avg_price: float = Field(gt=0)
+    name: Optional[str] = ""
+
+
+class PortfolioUpdateRequest(BaseModel):
+    ticker: str
+    shares: Optional[float] = None
+    avg_price: Optional[float] = None
+
+
+async def _get_current_price_simple(ticker: str, asset_type: str) -> float:
+    try:
+        if asset_type == "crypto":
+            return await fetch_crypto_price(ticker)
+        df = await fetch_stock_data(ticker, period="5d")
+        return float(df["Close"].squeeze().iloc[-1])
+    except Exception:
+        return 0.0
+
+
+@app.on_event("startup")
+async def startup():  # type: ignore[no-redef]
+    _ensure_log_file()
+    _load_watchlist()
+    _load_portfolio()
+
+
+@app.get("/api/portfolio")
+async def get_portfolio():
+    if not portfolio_data:
+        return {"holdings": [], "summary": {"total_value": 0, "total_cost": 0, "total_pnl": 0, "total_pnl_pct": 0}}
+
+    tasks = []
+    for item in portfolio_data:
+        sym, atype = resolve_ticker(item["ticker"])
+        tasks.append(_get_current_price_simple(sym, atype))
+
+    prices = await asyncio.gather(*tasks, return_exceptions=True)
+
+    holdings = []
+    total_value = total_cost = 0.0
+
+    for item, price in zip(portfolio_data, prices):
+        cur = float(price) if isinstance(price, (int, float)) and price else item.get("avg_price", 0)
+        cost  = item["shares"] * item["avg_price"]
+        value = item["shares"] * cur
+        pnl   = value - cost
+        pnl_pct = round((cur - item["avg_price"]) / item["avg_price"] * 100, 2) if item["avg_price"] else 0
+
+        total_value += value
+        total_cost  += cost
+
+        holdings.append({
+            **item,
+            "current_price": round(cur, 4),
+            "current_value": round(value, 2),
+            "cost_basis":    round(cost, 2),
+            "pnl":           round(pnl, 2),
+            "pnl_pct":       pnl_pct,
+            "weight_pct":    0,  # 후계산
+        })
+
+    # 비중 계산
+    for h in holdings:
+        h["weight_pct"] = round(h["current_value"] / total_value * 100, 1) if total_value else 0
+
+    total_pnl = total_value - total_cost
+    return {
+        "holdings": holdings,
+        "summary": {
+            "total_value":   round(total_value, 2),
+            "total_cost":    round(total_cost, 2),
+            "total_pnl":     round(total_pnl, 2),
+            "total_pnl_pct": round(total_pnl / total_cost * 100, 2) if total_cost else 0,
+            "positions":     len(holdings),
+        },
+    }
+
+
+@app.post("/api/portfolio/add")
+async def add_portfolio(item: PortfolioItem):
+    sym, _ = resolve_ticker(item.ticker)
+    async with _portfolio_lock:
+        existing = next((p for p in portfolio_data if p["ticker"] == sym), None)
+        if existing:
+            total_shares = existing["shares"] + item.shares
+            existing["avg_price"] = round(
+                (existing["shares"] * existing["avg_price"] + item.shares * item.avg_price) / total_shares, 4
+            )
+            existing["shares"] = total_shares
+        else:
+            portfolio_data.append({
+                "ticker": sym,
+                "name": item.name or sym,
+                "shares": item.shares,
+                "avg_price": item.avg_price,
+                "added_at": datetime.utcnow().isoformat(),
+            })
+        await _save_portfolio()
+    return await get_portfolio()
+
+
+@app.delete("/api/portfolio/{ticker}")
+async def remove_portfolio(ticker: str):
+    global portfolio_data
+    sym, _ = resolve_ticker(ticker)
+    async with _portfolio_lock:
+        portfolio_data = [p for p in portfolio_data if p["ticker"] != sym]
+        await _save_portfolio()
+    return await get_portfolio()
+
+
+@app.get("/api/portfolio/correlation")
+async def portfolio_correlation():
+    """보유 종목 간 수익률 상관관계 매트릭스 (90일 기준)."""
+    if len(portfolio_data) < 2:
+        raise HTTPException(status_code=400, detail="상관관계 분석을 위해 최소 2개 종목이 필요합니다")
+
+    async def _fetch_returns(item: dict) -> tuple[str, Optional[pd.Series]]:
+        sym, atype = resolve_ticker(item["ticker"])
+        try:
+            if atype == "crypto":
+                df = await fetch_crypto_ohlcv(sym, days=90)
+            else:
+                df = await fetch_stock_data(sym, period="3mo")
+            close = df["Close"].squeeze().dropna()
+            return sym, close.pct_change().dropna()
+        except Exception:
+            return sym, None
+
+    fetch_results = await asyncio.gather(*[_fetch_returns(item) for item in portfolio_data])
+    series_map: dict[str, pd.Series] = {sym: s for sym, s in fetch_results if s is not None}
+
+    if len(series_map) < 2:
+        raise HTTPException(status_code=502, detail="데이터를 불러올 수 없는 종목이 있습니다")
+
+    aligned = pd.DataFrame(series_map).dropna()
+    corr    = aligned.corr().round(3)
+
+    matrix = []
+    tickers = corr.columns.tolist()
+    for t1 in tickers:
+        row = []
+        for t2 in tickers:
+            row.append(float(corr.loc[t1, t2]))
+        matrix.append({"ticker": t1, "correlations": dict(zip(tickers, row))})
+
+    return {"tickers": tickers, "matrix": matrix}
+
+
+# ── Claude API 프록시 (standalone HTML용) ─────────────────────────────────────
+@app.post("/api/claude/proxy")
+async def claude_proxy(request: Request):
+    """서버의 ANTHROPIC_API_KEY로 Claude API 요청을 프록시합니다."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+
+@app.get("/api/server-status")
+async def server_status():
+    """Standalone HTML이 백엔드 존재 여부를 확인할 때 사용합니다."""
+    return {"ok": True, "hasApiKey": bool(ANTHROPIC_API_KEY)}
+
+
+# standalone HTML 직접 서빙
+@app.get("/standalone")
+async def serve_standalone():
+    p = Path("chart-sentinel-standalone.html")
+    if p.exists():
+        return FileResponse(p, media_type="text/html")
+    raise HTTPException(status_code=404, detail="standalone HTML not found")
 
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────

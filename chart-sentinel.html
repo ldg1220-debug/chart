@@ -7,6 +7,8 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     :root {
       --bg0: #0d1117; --bg1: #161b22; --bg2: #21262d;
@@ -187,6 +189,73 @@
     .scroll-area::-webkit-scrollbar { width: 4px; }
     .scroll-area::-webkit-scrollbar-track { background: transparent; }
     .scroll-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* 비교 탭 */
+    .compare-input-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    .compare-ticker-input { flex: 1; min-width: 100px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; color: var(--text); font-size: 14px; outline: none; }
+    .compare-ticker-input:focus { border-color: var(--blue); }
+    .compare-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .compare-card { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .compare-card.error { border-color: rgba(239,68,68,.3); }
+    .compare-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .compare-ticker { font-size: 16px; font-weight: 700; }
+    .rank-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+    .rank-1 { background: rgba(245,158,11,.2); color: var(--amber); }
+    .rank-2 { background: rgba(139,148,158,.15); color: var(--text2); }
+    .rank-3 { background: rgba(180,120,80,.15); color: #cd7f32; }
+    .perf-num { font-size: 20px; font-weight: 700; }
+    .perf-pos { color: var(--green); }
+    .perf-neg { color: var(--red); }
+    .compare-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
+    .compare-summary { background: var(--bg2); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; display: flex; gap: 20px; flex-wrap: wrap; }
+    .compare-summary-item { display: flex; flex-direction: column; gap: 2px; }
+    .compare-summary-label { color: var(--text2); font-size: 11px; }
+    .compare-summary-val { font-weight: 600; }
+
+    /* 캡처 버튼 (P1-3) */
+    .capture-btn { background: rgba(168,85,247,.12); color: var(--purple); border: 1px solid rgba(168,85,247,.3); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; transition: all .15s; margin-top: 8px; }
+    .capture-btn:hover { background: rgba(168,85,247,.22); }
+    .capture-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* 자동 검증 (P1-2) */
+    .auto-eval-result { background: var(--bg2); border-radius: 8px; padding: 12px 16px; margin-top: 12px; font-size: 13px; }
+    .auto-eval-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .auto-eval-item:last-child { border-bottom: none; }
+
+    /* 검색 자동완성 (P2-2) */
+    .autocomplete-wrap { position: relative; flex: 1; }
+    .autocomplete-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; margin-top: 4px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+    .autocomplete-item { padding: 9px 14px; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; }
+    .autocomplete-item:hover, .autocomplete-item.active { background: var(--bg2); }
+    .autocomplete-tag { font-size: 11px; color: var(--text2); }
+
+    /* 내보내기 버튼 (P2-2) */
+    .export-btn { background: rgba(59,130,246,.1); color: var(--blue); border: 1px solid rgba(59,130,246,.25); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; transition: all .15s; }
+    .export-btn:hover { background: rgba(59,130,246,.2); }
+    .export-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* 히스토리 모달 (P2-2) */
+    .history-modal { background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 28px; width: 95%; max-width: 680px; max-height: 85vh; overflow-y: auto; }
+    .log-row-clickable { cursor: pointer; }
+    .log-row-clickable:hover td { background: rgba(59,130,246,.06) !important; }
+
+    /* 설정 드로어 (P2-3) */
+    .settings-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 320px; background: var(--bg1); border-left: 1px solid var(--border); z-index: 200; padding: 24px; transform: translateX(100%); transition: transform .25s ease; }
+    .settings-drawer.open { transform: translateX(0); }
+    .settings-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 190; }
+    .settings-title { font-size: 16px; font-weight: 700; margin-bottom: 20px; }
+    .settings-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+    .settings-input { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 13px; outline: none; margin-bottom: 16px; }
+    .settings-input:focus { border-color: var(--blue); }
+    .settings-radio-group { display: flex; gap: 8px; margin-bottom: 16px; }
+    .settings-radio-btn { flex: 1; padding: 8px; border-radius: 8px; font-size: 13px; border: 1px solid var(--border); background: var(--bg2); color: var(--text2); transition: all .15s; text-align: center; }
+    .settings-radio-btn.selected { border-color: var(--blue); background: rgba(59,130,246,.1); color: var(--blue); font-weight: 600; }
+    .settings-section { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .settings-section:last-child { border-bottom: none; }
+
+    /* 토스트 알림 */
+    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; padding: 10px 18px; font-size: 13px; z-index: 300; box-shadow: 0 4px 16px rgba(0,0,0,.4); animation: fadeInUp .2s ease; pointer-events: none; }
+    @keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(8px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
   </style>
 </head>
 <body>
@@ -195,13 +264,62 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
+// ── ErrorBoundary ─────────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error("[Chart Sentinel] 렌더 오류:", e, info); }
+  render() {
+    if (this.state.error) return (
+      <div style={{padding:40,textAlign:"center",color:"var(--red)"}}>
+        <div style={{fontSize:32,marginBottom:12}}>⚠</div>
+        <div style={{fontWeight:700,marginBottom:8}}>렌더링 오류가 발생했습니다</div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16}}>{String(this.state.error)}</div>
+        <button className="btn-primary" onClick={() => this.setState({ error: null })}>
+          다시 시도
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 const QUICK_TICKERS = ["NVDA", "AAPL", "TSLA", "BTC", "ETH", "삼성전자"];
-const BASE_URL = (() => {
+const ANTHROPIC_DIRECT = "https://api.anthropic.com/v1/messages";
+
+// P2-3: 동적 BASE_URL — 설정에서 오버라이드 가능
+function getBaseUrl() {
+  const saved = ls_get("cs_backend_url", null);
+  if (saved === "direct") return null;
+  if (saved) return saved;
   if (window.location.protocol === "file:") return null;
   return window.location.origin;
-})();
-const ANTHROPIC_DIRECT = "https://api.anthropic.com/v1/messages";
+}
+
+// P2-2: 자동완성 데이터
+const AUTOCOMPLETE_TICKERS = [
+  { symbol: "NVDA", name: "NVIDIA", tag: "반도체" },
+  { symbol: "AAPL", name: "Apple", tag: "빅테크" },
+  { symbol: "TSLA", name: "Tesla", tag: "전기차" },
+  { symbol: "MSFT", name: "Microsoft", tag: "빅테크" },
+  { symbol: "GOOGL", name: "Alphabet", tag: "빅테크" },
+  { symbol: "AMZN", name: "Amazon", tag: "빅테크" },
+  { symbol: "META", name: "Meta", tag: "소셜" },
+  { symbol: "NFLX", name: "Netflix", tag: "미디어" },
+  { symbol: "AMD", name: "AMD", tag: "반도체" },
+  { symbol: "INTC", name: "Intel", tag: "반도체" },
+  { symbol: "BTC", name: "Bitcoin", tag: "코인" },
+  { symbol: "ETH", name: "Ethereum", tag: "코인" },
+  { symbol: "SOL", name: "Solana", tag: "코인" },
+  { symbol: "XRP", name: "Ripple", tag: "코인" },
+  { symbol: "DOGE", name: "Dogecoin", tag: "코인" },
+  { symbol: "삼성전자", name: "Samsung Electronics", tag: "한국" },
+  { symbol: "SK하이닉스", name: "SK Hynix", tag: "한국" },
+  { symbol: "네이버", name: "NAVER", tag: "한국" },
+  { symbol: "카카오", name: "Kakao", tag: "한국" },
+  { symbol: "현대차", name: "Hyundai Motor", tag: "한국" },
+];
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -209,7 +327,22 @@ function ls_get(key, fallback) {
   catch { return fallback; }
 }
 function ls_set(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch (e) {
+    if (e && e.name === "QuotaExceededError" && key === "cs_logs" && Array.isArray(val)) {
+      // 차트 이미지부터 제거하여 용량 확보 후 재시도
+      const trimmed = val.map(({ _chart, ...rest }) => rest);
+      try {
+        localStorage.setItem(key, JSON.stringify(trimmed));
+        console.warn("[Chart Sentinel] localStorage 용량 부족 — 차트 이미지를 제외하고 저장했습니다.");
+      } catch {
+        // 그래도 실패하면 최근 10개만 저장
+        try { localStorage.setItem(key, JSON.stringify(trimmed.slice(0, 10))); } catch {}
+        console.warn("[Chart Sentinel] localStorage 용량 부족 — 최근 10건만 유지합니다.");
+      }
+    }
+  }
 }
 
 function positionClass(pos) {
@@ -224,15 +357,20 @@ function badgeClass(pos) {
   return c === "pos-buy" ? "badge-buy" : c === "pos-sell" ? "badge-sell" : "badge-hold";
 }
 
-// ── TradingView 위젯 ──────────────────────────────────────────────────────────
-function TradingViewWidget({ symbol }) {
+// ── TradingView 위젯 (P1-3: html2canvas 캡처 포함) ───────────────────────────
+function TradingViewWidget({ symbol, onCapture }) {
   const ref = useRef(null);
+  const [capturing, setCapturing] = useState(false);
+  const [widgetError, setWidgetError] = useState(false);
+
   useEffect(() => {
     if (!symbol || !ref.current) return;
+    setWidgetError(false);
     ref.current.innerHTML = "";
     const s = document.createElement("script");
     s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     s.async = true;
+    s.onerror = () => setWidgetError(true);
     s.innerHTML = JSON.stringify({
       symbol, interval: "D", theme: "dark", style: "1",
       locale: "kr", width: "100%", height: 400,
@@ -240,7 +378,177 @@ function TradingViewWidget({ symbol }) {
     });
     ref.current.appendChild(s);
   }, [symbol]);
-  return <div ref={ref} className="tv-container" />;
+
+  const handleCapture = async () => {
+    if (!ref.current || !onCapture) return;
+    setCapturing(true);
+    try {
+      if (typeof html2canvas === "undefined") {
+        throw new Error("html2canvas 라이브러리를 불러오지 못했습니다");
+      }
+      const canvas = await html2canvas(ref.current, {
+        useCORS: true, allowTaint: true,
+        backgroundColor: "#0d1117", scale: 1,
+        logging: false,
+      });
+      canvas.toBlob(blob => {
+        if (blob) onCapture(blob);
+        else onCapture(null, "캡처 실패: blob 변환 오류");
+      }, "image/png");
+    } catch (e) {
+      onCapture(null, e.message || "캡처 중 오류 발생");
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  return (
+    <div>
+      {widgetError ? (
+        <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",
+          background:"var(--bg2)",borderRadius:8,color:"var(--text2)",fontSize:13}}>
+          ⚠ TradingView 차트를 불러올 수 없습니다 (네트워크 또는 광고 차단기 확인)
+        </div>
+      ) : (
+        <div ref={ref} className="tv-container" />
+      )}
+      {onCapture && !widgetError && (
+        <button className="capture-btn" onClick={handleCapture} disabled={capturing || !symbol}>
+          {capturing ? "캡처 중..." : "📸 차트 캡처 → AI 분석"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── P2-2: 검색 자동완성 ───────────────────────────────────────────────────────
+function SearchAutocomplete({ value, onChange, onSelect, onSubmit, loading, prevTickers }) {
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const inputRef = useRef(null);
+
+  const q = value.trim().toLowerCase();
+  const suggestions = q.length < 1 ? [] : [
+    ...AUTOCOMPLETE_TICKERS.filter(t =>
+      t.symbol.toLowerCase().startsWith(q) || t.name.toLowerCase().includes(q)
+    ).slice(0, 5),
+    ...prevTickers
+      .filter(t => t.toLowerCase().startsWith(q) && !AUTOCOMPLETE_TICKERS.find(a => a.symbol === t))
+      .slice(0, 3)
+      .map(t => ({ symbol: t, name: "", tag: "이전" })),
+  ].slice(0, 7);
+
+  const handleKey = (e) => {
+    if (!open || suggestions.length === 0) {
+      if (e.key === "Enter") { onSubmit(); setOpen(false); }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i+1, suggestions.length-1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx(i => Math.max(i-1, -1)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIdx >= 0) { onSelect(suggestions[activeIdx].symbol); setOpen(false); }
+      else { onSubmit(); setOpen(false); }
+    } else if (e.key === "Escape") { setOpen(false); }
+  };
+
+  return (
+    <div className="autocomplete-wrap">
+      <input className="search-input"
+        ref={inputRef}
+        placeholder="종목 검색 (NVDA, BTC, 삼성전자...)"
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true); setActiveIdx(-1); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={handleKey}
+      />
+      {open && suggestions.length > 0 && (
+        <div className="autocomplete-list">
+          {suggestions.map((s, i) => (
+            <div key={s.symbol}
+              className={`autocomplete-item${i === activeIdx ? " active" : ""}`}
+              onMouseDown={() => { onSelect(s.symbol); setOpen(false); }}>
+              <span><strong>{s.symbol}</strong>{s.name ? ` — ${s.name}` : ""}</span>
+              <span className="autocomplete-tag">{s.tag}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── P2-2: 리포트 내보내기 ─────────────────────────────────────────────────────
+async function exportReportAsPng(reportEl, ticker) {
+  if (typeof html2canvas === "undefined") { alert("html2canvas 로딩 중..."); return; }
+  const canvas = await html2canvas(reportEl, {
+    backgroundColor: "#161b22", scale: 2, logging: false, useCORS: true,
+  });
+  const link = document.createElement("a");
+  link.download = `chart-sentinel-${ticker}-${new Date().toISOString().slice(0,10)}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+}
+
+// ── P2-3: 설정 드로어 ─────────────────────────────────────────────────────────
+function SettingsDrawer({ open, onClose, settings, onSave }) {
+  const [mode, setMode] = useState(settings.mode || "auto");
+  const [backendUrl, setBackendUrl] = useState(settings.backendUrl || "http://localhost:8000");
+  const [apiKey, setApiKey] = useState(settings.apiKey || "");
+
+  const handleSave = () => {
+    onSave({ mode, backendUrl, apiKey });
+    onClose();
+  };
+
+  return (
+    <>
+      {open && <div className="settings-overlay" onClick={onClose} />}
+      <div className={`settings-drawer${open ? " open" : ""}`}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div className="settings-title">⚙ 설정</div>
+          <button className="btn-ghost" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-label">API 연동 방식</div>
+          <div className="settings-radio-group">
+            {[["auto","자동 감지"],["backend","로컬 백엔드"],["direct","직접 호출"]].map(([v,l]) => (
+              <button key={v} className={`settings-radio-btn${mode===v?" selected":""}`}
+                onClick={() => setMode(v)}>{l}</button>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:"var(--text2)",lineHeight:1.5}}>
+            {mode === "auto" && "서버 실행 여부에 따라 자동 선택"}
+            {mode === "backend" && "로컬 FastAPI 서버를 통해 분석 (Plotly 차트, CSV 로깅, 텔레그램 알림 활성화)"}
+            {mode === "direct" && "브라우저에서 Anthropic API 직접 호출 (텍스트 분석만 가능)"}
+          </div>
+        </div>
+
+        {mode === "backend" && (
+          <div className="settings-section">
+            <div className="settings-label">백엔드 서버 URL</div>
+            <input className="settings-input" value={backendUrl}
+              onChange={e => setBackendUrl(e.target.value)}
+              placeholder="http://localhost:8000" />
+          </div>
+        )}
+
+        <div className="settings-section">
+          <div className="settings-label">Anthropic API 키</div>
+          <input className="settings-input" type="password" value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder="sk-ant-api03-..." />
+          <div style={{fontSize:12,color:"var(--text2)"}}>
+            직접 호출 모드 또는 백엔드 없이 브라우저에서 사용 시 필요합니다
+          </div>
+        </div>
+
+        <button className="btn-primary" style={{width:"100%"}} onClick={handleSave}>저장</button>
+      </div>
+    </>
+  );
 }
 
 // ── 이미지 드롭존 ─────────────────────────────────────────────────────────────
@@ -292,8 +600,10 @@ function Loader({ step }) {
   );
 }
 
-// ── 리포트 카드 ───────────────────────────────────────────────────────────────
+// ── 리포트 카드 (P2-2: 내보내기 포함) ──────────────────────────────────────
 function ReportCard({ report, chartImage, logId, onResult }) {
+  const cardRef = useRef(null);
+  const [exporting, setExporting] = useState(false);
   const tech = report.technical_analysis || {};
   const fund = report.fundamental_analysis || {};
   const strat = report.strategy || {};
@@ -301,14 +611,27 @@ function ReportCard({ report, chartImage, logId, onResult }) {
   const bClass   = badgeClass(strat.position);
   const conf = parseInt(strat.confidence) || 0;
 
+  const handleExport = async () => {
+    if (!cardRef.current) return;
+    setExporting(true);
+    try { await exportReportAsPng(cardRef.current, report.ticker || "report"); }
+    catch (e) { alert("내보내기 실패: " + e.message); }
+    finally { setExporting(false); }
+  };
+
   return (
-    <div>
+    <div ref={cardRef}>
       <div className="report-header">
         <div>
           <div className="report-name">{report.name || report.ticker}</div>
           <div className="report-ticker">{report.ticker} · {report.timeframe}</div>
         </div>
-        <div className="report-price">{report.current_price}</div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+          <div className="report-price">{report.current_price}</div>
+          <button className="export-btn" onClick={handleExport} disabled={exporting}>
+            {exporting ? "저장 중..." : "⬇ PNG 저장"}
+          </button>
+        </div>
       </div>
 
       {chartImage && (
@@ -353,8 +676,10 @@ function ReportCard({ report, chartImage, logId, onResult }) {
   );
 }
 
-// ── 성과 탭 ───────────────────────────────────────────────────────────────────
-function PerformanceTab({ logs, onUpdateResult }) {
+// ── 성과 탭 (P1-2: 자동 검증 포함) ──────────────────────────────────────────
+function PerformanceTab({ logs, onUpdateResult, setHistoryModal, baseUrl }) {
+  const [autoEvalLoading, setAutoEvalLoading] = useState(false);
+  const [autoEvalResult, setAutoEvalResult] = useState(null);
   const evaluated = logs.filter(l => l.result === "win" || l.result === "loss");
   const wins  = evaluated.filter(l => l.result === "win").length;
   const winRate = evaluated.length ? Math.round(wins / evaluated.length * 100) : 0;
@@ -417,8 +742,64 @@ function PerformanceTab({ logs, onUpdateResult }) {
         </div>
       )}
 
+      {/* P1-2: 자동 검증 */}
+      {baseUrl && (
+        <div className="card" style={{marginBottom:20}}>
+          <div className="card-title">자동 승률 검증</div>
+          <div style={{fontSize:13,color:"var(--text2)",marginBottom:12,lineHeight:1.5}}>
+            분석 후 5일 이상 경과한 대기 항목을 현재 가격과 비교하여 자동으로 Win/Loss를 판정합니다.
+            20일 초과 시 진입가 대비 2% 초과 여부로 판정합니다.
+          </div>
+          <button className="btn-primary" style={{marginBottom:12}}
+            disabled={autoEvalLoading}
+            onClick={async () => {
+              setAutoEvalLoading(true);
+              setAutoEvalResult(null);
+              try {
+                const resp = await fetch(`${baseUrl}/api/performance/auto-evaluate`);
+                const data = await resp.json();
+                setAutoEvalResult(data);
+              } catch (e) {
+                setAutoEvalResult({ error: e.message });
+              } finally {
+                setAutoEvalLoading(false);
+              }
+            }}>
+            {autoEvalLoading ? "검증 중..." : "⚡ 자동 검증 실행"}
+          </button>
+          {autoEvalResult && (
+            <div className="auto-eval-result">
+              {autoEvalResult.error ? (
+                <div style={{color:"var(--red)"}}>⚠ {autoEvalResult.error}</div>
+              ) : (
+                <>
+                  <div style={{marginBottom:8,fontWeight:600}}>
+                    {autoEvalResult.evaluated_count}건 판정 완료
+                    {autoEvalResult.stats && ` · 갱신 승률: ${autoEvalResult.stats.win_rate}%`}
+                  </div>
+                  {(autoEvalResult.evaluated || []).map((e, i) => (
+                    <div key={i} className="auto-eval-item">
+                      <span><strong>{e.ticker}</strong> · {e.days_elapsed}일 경과</span>
+                      <span className={`result-badge ${e.result==="win"?"rb-win":"rb-loss"}`}>
+                        {e.result==="win"?"✓ Win":"✗ Loss"}
+                      </span>
+                    </div>
+                  ))}
+                  {autoEvalResult.evaluated_count === 0 && (
+                    <div style={{color:"var(--text2)"}}>5일 이상 경과한 대기 항목이 없습니다</div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card">
-        <div className="card-title">최근 분석 기록</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div className="card-title" style={{margin:0}}>최근 분석 기록</div>
+          <div style={{fontSize:12,color:"var(--text2)"}}>행 클릭 → 리포트 재보기</div>
+        </div>
         {logs.length === 0 ? (
           <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">아직 분석 기록이 없습니다</div></div>
         ) : (
@@ -432,7 +813,8 @@ function PerformanceTab({ logs, onUpdateResult }) {
               </thead>
               <tbody>
                 {logs.map(l => (
-                  <tr key={l.id}>
+                  <tr key={l.id} className="log-row-clickable"
+                    onClick={() => l._report && setHistoryModal({ report: l._report, chart: l._chart })}>
                     <td><strong>{l.ticker}</strong></td>
                     <td><span className={`pos-badge ${badgeClass(l.position)}`} style={{fontSize:11,padding:"2px 8px"}}>{l.position||"-"}</span></td>
                     <td>{l.confidence||"-"}</td>
@@ -443,7 +825,7 @@ function PerformanceTab({ logs, onUpdateResult }) {
                         {l.result==="win"?"✓ Win":l.result==="loss"?"✗ Loss":"대기"}
                       </span>
                     </td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       {l.result === "pending" && (
                         <div className="wl-sm">
                           <button className="bw" onClick={() => onUpdateResult(l.id, "win")}>W</button>
@@ -458,6 +840,178 @@ function PerformanceTab({ logs, onUpdateResult }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── 비교 탭 (P1-1) ────────────────────────────────────────────────────────────
+function CompareTab({ addLog, baseUrl }) {
+  const [tickers, setTickers] = useState(["", "", ""]);
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [error, setError] = useState("");
+
+  const handleCompare = async () => {
+    const valid = tickers.filter(t => t.trim());
+    if (valid.length < 2) { setError("최소 2개 종목을 입력하세요"); return; }
+    if (!baseUrl) { setError("비교 분석은 백엔드 서버(localhost:8000)가 필요합니다"); return; }
+
+    setError(""); setResults(null); setSummary(null); setLoading(true);
+    try {
+      const resp = await fetch(`${baseUrl}/api/compare?tickers=${encodeURIComponent(valid.join(","))}`);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || `서버 오류 ${resp.status}`); }
+      const data = await resp.json();
+      setResults(data.results);
+      setSummary(data.summary);
+      // 성과 로그 추가
+      data.results.forEach(r => { if (r.report) addLog(r.report); });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const rankClass = (rank) => rank === 1 ? "rank-1" : rank === 2 ? "rank-2" : "rank-3";
+  const rankLabel = (rank) => rank === 1 ? "🥇 1위" : rank === 2 ? "🥈 2위" : rank === 3 ? "🥉 3위" : "-";
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">종목 비교 분석</div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16}}>
+          2~3개 종목을 동시에 분석하여 3개월 수익률 기준으로 상대 강도를 비교합니다.
+        </div>
+        <div className="compare-input-row">
+          {tickers.map((t, i) => (
+            <input key={i} className="compare-ticker-input"
+              placeholder={`종목 ${i+1} (예: ${["NVDA","AAPL","TSLA"][i]})`}
+              value={t}
+              onChange={e => setTickers(prev => prev.map((v, j) => j === i ? e.target.value : v))}
+              onKeyDown={e => e.key === "Enter" && !loading && handleCompare()} />
+          ))}
+          <button className="btn-primary" onClick={handleCompare}
+            disabled={loading || tickers.filter(t=>t.trim()).length < 2}>
+            {loading ? "분석 중..." : "⚡ 비교 분석"}
+          </button>
+        </div>
+        <div className="quick-btns">
+          {[["NVDA","AAPL","TSLA"],["BTC","ETH","SOL"],["삼성전자","SK하이닉스","NAVER"]].map((preset, i) => (
+            <button key={i} className="quick-btn"
+              onClick={() => setTickers([...preset])}>
+              {preset.join(" vs ")}
+            </button>
+          ))}
+        </div>
+        {error && <div className="error-card" style={{marginTop:12}}>⚠ {error}</div>}
+      </div>
+
+      {loading && (
+        <div className="card" style={{textAlign:"center",padding:"40px 20px"}}>
+          <div className="loader-spinner" />
+          <div style={{color:"var(--text2)",fontSize:14,marginTop:12}}>
+            {tickers.filter(t=>t.trim()).length}개 종목 병렬 분석 중...
+          </div>
+        </div>
+      )}
+
+      {summary && (
+        <div className="compare-summary">
+          <div className="compare-summary-item">
+            <span className="compare-summary-label">최고 성과</span>
+            <span className="compare-summary-val" style={{color:"var(--green)"}}>🏆 {summary.best_performer}</span>
+          </div>
+          <div className="compare-summary-item">
+            <span className="compare-summary-label">최저 성과</span>
+            <span className="compare-summary-val" style={{color:"var(--red)"}}>📉 {summary.worst_performer}</span>
+          </div>
+          <div className="compare-summary-item">
+            <span className="compare-summary-label">비교 종목</span>
+            <span className="compare-summary-val">{(summary.tickers || []).join(" · ")}</span>
+          </div>
+        </div>
+      )}
+
+      {results && (
+        <div className="compare-grid">
+          {results.map((r, i) => (
+            <div key={i} className={`compare-card${r.error ? " error" : ""}`}>
+              <div className="compare-header">
+                <div>
+                  <div className="compare-ticker">{r.ticker}</div>
+                  <div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>
+                    {r.report?.name || r.query}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {r.relative_rank && (
+                    <span className={`rank-badge ${rankClass(r.relative_rank)}`}>
+                      {rankLabel(r.relative_rank)}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {r.error ? (
+                <div style={{color:"var(--red)",fontSize:13}}>⚠ {r.error}</div>
+              ) : (
+                <>
+                  <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                    <span className={`perf-num ${r.perf_3m >= 0 ? "perf-pos" : "perf-neg"}`}>
+                      {r.perf_3m >= 0 ? "+" : ""}{r.perf_3m}%
+                    </span>
+                    <span style={{fontSize:12,color:"var(--text2)"}}>3개월 수익률</span>
+                  </div>
+
+                  {r.report?.current_price && (
+                    <div style={{fontSize:13,color:"var(--text2)",marginBottom:8}}>
+                      현재가: <strong style={{color:"var(--text)"}}>{r.report.current_price}</strong>
+                    </div>
+                  )}
+
+                  {r.report?.strategy && (
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                      <span className={`pos-badge ${badgeClass(r.report.strategy.position)}`}
+                        style={{fontSize:11,padding:"2px 10px"}}>
+                        {r.report.strategy.position}
+                      </span>
+                      <span style={{fontSize:12,color:"var(--text2)"}}>
+                        확신도 {r.report.strategy.confidence}/10
+                      </span>
+                    </div>
+                  )}
+
+                  {r.chart_image && (
+                    <div className="chart-img-wrap" style={{marginBottom:8}}>
+                      <img src={`data:image/png;base64,${r.chart_image}`} alt={r.ticker} />
+                    </div>
+                  )}
+
+                  <div className="compare-section">
+                    <div style={{color:"var(--text2)",marginBottom:4}}>기술적 분석</div>
+                    <div style={{lineHeight:1.5}}>{r.report?.technical_analysis?.summary || "-"}</div>
+                  </div>
+
+                  <div className="compare-section">
+                    <div style={{color:"var(--text2)",marginBottom:4}}>전략 근거</div>
+                    <div style={{lineHeight:1.5}}>{r.report?.strategy?.rationale || "-"}</div>
+                  </div>
+
+                  <div className="compare-section" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12}}>
+                    <span style={{color:"var(--text2)"}}>진입</span>
+                    <span>{r.report?.strategy?.entry_zone || "-"}</span>
+                    <span style={{color:"var(--text2)"}}>목표</span>
+                    <span>{(r.report?.strategy?.target_prices || [])[0] || "-"}</span>
+                    <span style={{color:"var(--text2)"}}>손절</span>
+                    <span>{r.report?.strategy?.stop_loss || "-"}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -519,6 +1073,305 @@ function MonitorTab({ watchlist, onAdd, onRemove, monitoring, onToggleMonitor })
           {monitoring ? "⏹ 모니터 중지" : "▶ 모니터 시작"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── P3-2: 백테스팅 탭 ────────────────────────────────────────────────────────
+function BacktestTab() {
+  const [ticker, setTicker] = useState("");
+  const [period, setPeriod] = useState("6mo");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!ticker.trim()) return;
+    const bu = getBaseUrl();
+    if (!bu) { setError("백엔드 서버 연결이 필요합니다"); return; }
+    setLoading(true); setError(""); setResult(null);
+    try {
+      const resp = await fetch(`${bu}/api/backtest?ticker=${encodeURIComponent(ticker.trim())}&period=${period}`);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || `오류 ${resp.status}`); }
+      setResult(await resp.json());
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const colorPct = (v) => v > 0 ? "var(--green)" : v < 0 ? "var(--red)" : "var(--text2)";
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">백테스팅 — MA20/MA60 크로스오버</div>
+        <div style={{fontSize:13,color:"var(--text2)",marginBottom:16}}>
+          MA20과 MA60의 골든/데드 크로스를 기반으로 과거 데이터에서 전략 성과를 시뮬레이션합니다.
+        </div>
+        <div className="search-wrap">
+          <input className="search-input" placeholder="종목 (AAPL, BTC, 삼성전자...)"
+            value={ticker} onChange={e => setTicker(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !loading && run()} />
+          <select value={period} onChange={e => setPeriod(e.target.value)}
+            style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:14,outline:"none"}}>
+            {[["1mo","1개월"],["3mo","3개월"],["6mo","6개월"],["1y","1년"],["2y","2년"]].map(([v,l]) =>
+              <option key={v} value={v}>{l}</option>
+            )}
+          </select>
+          <button className="btn-primary" onClick={run} disabled={loading || !ticker.trim()}>
+            {loading ? "실행 중..." : "▶ 백테스트"}
+          </button>
+        </div>
+        {error && <div className="error-card" style={{marginTop:12}}>⚠ {error}</div>}
+      </div>
+
+      {loading && (
+        <div className="card" style={{textAlign:"center",padding:"40px"}}>
+          <div className="loader-spinner" /><div style={{color:"var(--text2)",marginTop:12}}>시뮬레이션 실행 중...</div>
+        </div>
+      )}
+
+      {result && (
+        <>
+          <div className="stats-grid" style={{marginBottom:20}}>
+            {[
+              ["총 거래수", result.total_trades+"건", ""],
+              ["승률", result.win_rate+"%", result.win_rate >= 50 ? "var(--green)" : "var(--red)"],
+              ["전략 수익", (result.total_return_pct > 0 ? "+" : "")+result.total_return_pct+"%", colorPct(result.total_return_pct)],
+              ["Buy&Hold", (result.buy_and_hold_pct > 0 ? "+" : "")+result.buy_and_hold_pct+"%", colorPct(result.buy_and_hold_pct)],
+            ].map(([label,val,color]) => (
+              <div key={label} className="stat-card">
+                <div className="stat-label">{label}</div>
+                <div className="stat-value" style={{fontSize:20,color:color||"var(--text)"}}>{val}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card" style={{marginBottom:20}}>
+            <div className="card-title">전략 요약</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:13}}>
+              {[
+                ["전략",result.strategy],["분석 기간",result.period_days+"일"],
+                ["초과 수익",((result.excess_return_pct>0?"+":"")+result.excess_return_pct+"%")+" vs B&H"],
+                ["평균 수익","+"+result.avg_win_pct+"%"],["평균 손실",result.avg_loss_pct+"%"],
+              ].map(([k,v]) => (
+                <React.Fragment key={k}>
+                  <span style={{color:"var(--text2)"}}>{k}</span>
+                  <span style={{fontWeight:500}}>{v}</span>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+
+          {result.trades.length > 0 && (
+            <div className="card">
+              <div className="card-title">최근 거래 내역 (최대 20건)</div>
+              <div className="scroll-area">
+                <table className="log-table">
+                  <thead><tr><th>진입일</th><th>청산일</th><th>진입가</th><th>청산가</th><th>수익률</th><th>결과</th></tr></thead>
+                  <tbody>
+                    {result.trades.map((t, i) => (
+                      <tr key={i}>
+                        <td style={{fontSize:12}}>{t.entry_date}</td>
+                        <td style={{fontSize:12}}>{t.exit_date}</td>
+                        <td style={{fontSize:12}}>{t.entry_price}</td>
+                        <td style={{fontSize:12}}>{t.exit_price}</td>
+                        <td style={{fontWeight:600,color:colorPct(t.return_pct)}}>
+                          {t.return_pct > 0 ? "+" : ""}{t.return_pct}%
+                        </td>
+                        <td><span className={`result-badge ${t.result==="win"?"rb-win":t.result==="loss"?"rb-loss":"rb-pending"}`}>
+                          {t.result==="win"?"✓":t.result==="loss"?"✗":"보유"}
+                        </span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── P3-3: 포트폴리오 탭 ──────────────────────────────────────────────────────
+function PortfolioTab() {
+  const [holdings, setHoldings] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [addForm, setAddForm] = useState({ ticker:"", shares:"", avg_price:"" });
+  const [corrData, setCorrData] = useState(null);
+  const [corrLoading, setCorrLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const bu = getBaseUrl();
+
+  const load = async () => {
+    if (!bu) return;
+    setLoading(true);
+    try {
+      const resp = await fetch(`${bu}/api/portfolio`);
+      const data = await resp.json();
+      setHoldings(data.holdings || []);
+      setSummary(data.summary);
+    } catch {}
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleAdd = async () => {
+    if (!addForm.ticker || !addForm.shares || !addForm.avg_price) return;
+    try {
+      const resp = await fetch(`${bu}/api/portfolio/add`, {
+        method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({ ticker: addForm.ticker, shares: parseFloat(addForm.shares), avg_price: parseFloat(addForm.avg_price) }),
+      });
+      const data = await resp.json();
+      setHoldings(data.holdings || []); setSummary(data.summary);
+      setAddForm({ ticker:"", shares:"", avg_price:"" });
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleRemove = async (ticker) => {
+    try {
+      const resp = await fetch(`${bu}/api/portfolio/${ticker}`, { method:"DELETE" });
+      const data = await resp.json();
+      setHoldings(data.holdings || []); setSummary(data.summary);
+    } catch {}
+  };
+
+  const loadCorr = async () => {
+    if (!bu || holdings.length < 2) return;
+    setCorrLoading(true); setCorrData(null);
+    try {
+      const resp = await fetch(`${bu}/api/portfolio/correlation`);
+      if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail); }
+      setCorrData(await resp.json());
+    } catch (e) { setError(e.message); }
+    finally { setCorrLoading(false); }
+  };
+
+  const pnlColor = (v) => v > 0 ? "var(--green)" : v < 0 ? "var(--red)" : "var(--text2)";
+
+  if (!bu) return (
+    <div className="empty"><div className="empty-icon">🏦</div>
+      <div className="empty-text">포트폴리오 기능은 백엔드 서버(localhost:8000)가 필요합니다.<br />설정에서 연동 방식을 변경해주세요.</div></div>
+  );
+
+  return (
+    <div>
+      {summary && (
+        <div className="stats-grid" style={{marginBottom:20}}>
+          {[
+            ["총 평가액", "$"+summary.total_value.toLocaleString(), ""],
+            ["총 매입액", "$"+summary.total_cost.toLocaleString(), ""],
+            ["손익", (summary.total_pnl>=0?"+$":"-$")+Math.abs(summary.total_pnl).toLocaleString(), pnlColor(summary.total_pnl)],
+            ["수익률", (summary.total_pnl_pct>=0?"+":"")+summary.total_pnl_pct+"%", pnlColor(summary.total_pnl_pct)],
+          ].map(([label,val,color]) => (
+            <div key={label} className="stat-card">
+              <div className="stat-label">{label}</div>
+              <div className="stat-value" style={{fontSize:18,color:color||"var(--text)"}}>{val}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card" style={{marginBottom:20}}>
+        <div className="card-title">종목 추가</div>
+        <div className="compare-input-row">
+          <input className="compare-ticker-input" placeholder="종목 (AAPL)" value={addForm.ticker}
+            onChange={e => setAddForm(f => ({...f, ticker:e.target.value}))} />
+          <input className="compare-ticker-input" placeholder="수량" type="number" value={addForm.shares}
+            onChange={e => setAddForm(f => ({...f, shares:e.target.value}))} />
+          <input className="compare-ticker-input" placeholder="매입단가" type="number" value={addForm.avg_price}
+            onChange={e => setAddForm(f => ({...f, avg_price:e.target.value}))} />
+          <button className="btn-primary" onClick={handleAdd}>추가</button>
+          <button className="btn-ghost" onClick={load} disabled={loading}>{loading?"로딩...":"🔄 갱신"}</button>
+        </div>
+        {error && <div className="error-card" style={{marginTop:8}}>⚠ {error}</div>}
+      </div>
+
+      {holdings.length === 0 ? (
+        <div className="card"><div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">보유 종목을 추가해주세요</div></div></div>
+      ) : (
+        <div className="card" style={{marginBottom:20}}>
+          <div className="card-title">보유 종목</div>
+          <div className="scroll-area">
+            <table className="log-table">
+              <thead><tr><th>종목</th><th>수량</th><th>매입단가</th><th>현재가</th><th>평가액</th><th>손익</th><th>비중</th><th></th></tr></thead>
+              <tbody>
+                {holdings.map(h => (
+                  <tr key={h.ticker}>
+                    <td><strong>{h.ticker}</strong><div style={{fontSize:11,color:"var(--text2)"}}>{h.name}</div></td>
+                    <td>{h.shares}</td>
+                    <td>${h.avg_price.toLocaleString()}</td>
+                    <td>${h.current_price.toLocaleString()}</td>
+                    <td>${h.current_value.toLocaleString()}</td>
+                    <td style={{color:pnlColor(h.pnl),fontWeight:600}}>
+                      {h.pnl>=0?"+":""}{h.pnl_pct}%
+                    </td>
+                    <td>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{width:40,height:4,background:"var(--bg2)",borderRadius:2,overflow:"hidden"}}>
+                          <div style={{width:`${h.weight_pct}%`,height:"100%",background:"var(--blue)",borderRadius:2}} />
+                        </div>
+                        <span style={{fontSize:11,color:"var(--text2)"}}>{h.weight_pct}%</span>
+                      </div>
+                    </td>
+                    <td><button className="btn-danger" onClick={() => handleRemove(h.ticker)}>제거</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {holdings.length >= 2 && (
+        <div className="card">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div className="card-title" style={{margin:0}}>상관관계 매트릭스 (90일)</div>
+            <button className="btn-ghost" onClick={loadCorr} disabled={corrLoading}>
+              {corrLoading ? "계산 중..." : "📊 계산"}
+            </button>
+          </div>
+          {corrData && (
+            <div className="scroll-area">
+              <table className="log-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    {corrData.tickers.map(t => <th key={t}>{t}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {corrData.matrix.map(row => (
+                    <tr key={row.ticker}>
+                      <td><strong>{row.ticker}</strong></td>
+                      {corrData.tickers.map(t => {
+                        const v = row.correlations[t];
+                        const abs = Math.abs(v);
+                        const bg = v === 1 ? "rgba(59,130,246,.15)"
+                          : abs > 0.7 ? (v > 0 ? "rgba(239,68,68,.12)" : "rgba(34,197,94,.12)")
+                          : abs > 0.4 ? "rgba(245,158,11,.08)" : "transparent";
+                        return (
+                          <td key={t} style={{background:bg,fontWeight: v===1 ? 700 : 400,textAlign:"center",fontSize:12}}>
+                            {v.toFixed(2)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{marginTop:8,fontSize:11,color:"var(--text2)"}}>
+                🔴 강한 양의 상관 (&gt;0.7) · 🟢 강한 음의 상관 (&lt;-0.7) · 🟡 중간 상관
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -613,6 +1466,12 @@ async function analyzeDirectly(query, apiKey) {
 
 // ── 메인 앱 ───────────────────────────────────────────────────────────────────
 function App() {
+  // P2-3: 설정 상태
+  const [settings, setSettings] = useState(() => ls_get("cs_settings", { mode: "auto", backendUrl: "http://localhost:8000", apiKey: "" }));
+  const [showSettings, setShowSettings] = useState(false);
+  const baseUrl = settings.mode === "direct" ? null : settings.mode === "backend" ? settings.backendUrl : getBaseUrl();
+  const effectiveApiKey = settings.apiKey || ls_get("cs_api_key", "");
+
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [apiKey, setApiKey] = useState(() => ls_get("cs_api_key", ""));
   const [logs, setLogs] = useState(() => ls_get("cs_logs", []));
@@ -631,8 +1490,20 @@ function App() {
   const [currentLogId, setCurrentLogId] = useState(null);
   const [error, setError] = useState("");
 
+  // P2-2: 히스토리 모달 + 토스트
+  const [historyModal, setHistoryModal] = useState(null); // { report, chartImage }
+  const [toast, setToast] = useState("");
+
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2500);
+  };
+
+  // P2-2: 이전 분석 종목 목록 (자동완성용)
+  const prevTickers = [...new Set(logs.map(l => l.ticker).filter(Boolean))];
+
   useEffect(() => {
-    if (!apiKey && !BASE_URL) setShowKeyModal(true);
+    if (!effectiveApiKey && !baseUrl) setShowKeyModal(true);
   }, []);
 
   const saveApiKey = (key) => {
@@ -641,8 +1512,14 @@ function App() {
     setShowKeyModal(false);
   };
 
-  // P0-1: localStorage 영속화
-  const addLog = useCallback((rep) => {
+  const saveSettings = (s) => {
+    setSettings(s);
+    ls_set("cs_settings", s);
+    if (s.apiKey) { setApiKey(s.apiKey); ls_set("cs_api_key", s.apiKey); }
+  };
+
+  // P0-1 + P2-2: localStorage 영속화 + full report 저장
+  const addLog = useCallback((rep, imgB64) => {
     const entry = {
       id: String(Date.now()),
       timestamp: new Date().toISOString(),
@@ -656,6 +1533,8 @@ function App() {
       current_price: rep.current_price || "",
       timeframe: rep.timeframe || "",
       result: "pending",
+      _report: rep,
+      _chart: imgB64 || null,
     };
     setLogs(prev => {
       const updated = [entry, ...prev].slice(0, 100);
@@ -672,8 +1551,8 @@ function App() {
       return updated;
     });
     // 백엔드 연동
-    if (BASE_URL) {
-      fetch(`${BASE_URL}/api/performance/update`, {
+    if (baseUrl) {
+      fetch(`${baseUrl}/api/performance/update`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ log_id: id, result }),
@@ -682,6 +1561,7 @@ function App() {
   }, []);
 
   const handleAnalyze = async () => {
+    if (loading) return;
     if (!query.trim() && mode === "search") return;
     if (!imgFile && mode === "upload") return;
 
@@ -696,8 +1576,8 @@ function App() {
         setLoadStep(0);
         let result;
 
-        if (BASE_URL) {
-          const resp = await fetch(`${BASE_URL}/api/analyze-full?q=${encodeURIComponent(query.trim())}`);
+        if (baseUrl) {
+          const resp = await fetch(`${baseUrl}/api/analyze-full?q=${encodeURIComponent(query.trim())}`);
           if (!resp.ok) {
             const e = await resp.json();
             throw new Error(e.detail || `서버 오류 ${resp.status}`);
@@ -707,29 +1587,30 @@ function App() {
           setLoadStep(2);
           result = data.report;
           setChartImage(data.chart_image || null);
+          const id = addLog(result, data.chart_image || null);
+          setCurrentLogId(id);
         } else {
-          if (!apiKey) { setShowKeyModal(true); return; }
+          if (!effectiveApiKey) { setShowKeyModal(true); return; }
           setLoadStep(1);
-          result = await analyzeDirectly(query.trim(), apiKey);
+          result = await analyzeDirectly(query.trim(), effectiveApiKey);
           setLoadStep(2);
+          const id = addLog(result, null);
+          setCurrentLogId(id);
         }
-
         setReport(result);
-        const id = addLog(result);
-        setCurrentLogId(id);
 
       } else {
         // 이미지 업로드 모드
-        if (!BASE_URL) {
+        if (!baseUrl) {
           setError("이미지 분석은 백엔드 서버(localhost:8000)가 필요합니다.");
           return;
         }
         setLoadStep(0);
         const form = new FormData();
         form.append("file", imgFile);
-        if (apiKey) form.append("api_key", apiKey);
+        if (effectiveApiKey) form.append("api_key", effectiveApiKey);
 
-        const resp = await fetch(`${BASE_URL}/api/analyze`, { method: "POST", body: form });
+        const resp = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: form });
         if (!resp.ok) {
           const e = await resp.json();
           throw new Error(e.detail || `서버 오류 ${resp.status}`);
@@ -738,7 +1619,7 @@ function App() {
         const data = await resp.json();
         setReport(data.report);
         setChartImage(data.chart_image || null);
-        const id = addLog(data.report);
+        const id = addLog(data.report, data.chart_image || null);
         setCurrentLogId(id);
       }
     } catch (e) {
@@ -764,8 +1645,8 @@ function App() {
   const handleAddWatchlist = async (ticker) => {
     const item = { ticker: ticker.toUpperCase(), name: ticker, added_at: new Date().toISOString() };
     setWatchlist(prev => [...prev.filter(w => w.ticker !== item.ticker), item]);
-    if (BASE_URL) {
-      await fetch(`${BASE_URL}/api/watchlist`, {
+    if (baseUrl) {
+      await fetch(`${baseUrl}/api/watchlist`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ticker, name: ticker }),
@@ -775,18 +1656,18 @@ function App() {
 
   const handleRemoveWatchlist = async (ticker) => {
     setWatchlist(prev => prev.filter(w => w.ticker !== ticker));
-    if (BASE_URL) {
-      await fetch(`${BASE_URL}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
+    if (baseUrl) {
+      await fetch(`${baseUrl}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
     }
   };
 
   const handleToggleMonitor = async () => {
-    if (!BASE_URL) { setError("모니터 기능은 백엔드 서버가 필요합니다."); return; }
+    if (!baseUrl) { setError("모니터 기능은 백엔드 서버가 필요합니다."); return; }
     if (monitoring) {
-      await fetch(`${BASE_URL}/api/monitor/stop`, { method: "POST" }).catch(() => {});
+      await fetch(`${baseUrl}/api/monitor/stop`, { method: "POST" }).catch(() => {});
       setMonitoring(false);
     } else {
-      await fetch(`${BASE_URL}/api/monitor/start`, {
+      await fetch(`${baseUrl}/api/monitor/start`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ interval_minutes: 60 }),
@@ -795,9 +1676,36 @@ function App() {
     }
   };
 
+  const handleRemoveWatchlist2 = async (ticker) => {
+    setWatchlist(prev => prev.filter(w => w.ticker !== ticker));
+    if (baseUrl) {
+      await fetch(`${baseUrl}/api/watchlist/${ticker}`, { method: "DELETE" }).catch(() => {});
+    }
+  };
+
   return (
     <div className="app">
       {showKeyModal && <ApiKeyModal onSave={saveApiKey} />}
+
+      {/* P2-3: 설정 드로어 */}
+      <SettingsDrawer open={showSettings} onClose={() => setShowSettings(false)}
+        settings={{...settings, apiKey: effectiveApiKey}} onSave={saveSettings} />
+
+      {/* P2-2: 히스토리 재보기 모달 */}
+      {historyModal && (
+        <div className="modal-bg" onClick={() => setHistoryModal(null)}>
+          <div className="history-modal" onClick={e => e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+              <strong style={{fontSize:15}}>이전 분석 — {historyModal.report?.ticker}</strong>
+              <button className="btn-ghost" onClick={() => setHistoryModal(null)}>✕ 닫기</button>
+            </div>
+            <ReportCard report={historyModal.report} chartImage={historyModal.chart} logId={null} onResult={null} />
+          </div>
+        </div>
+      )}
+
+      {/* 토스트 */}
+      {toast && <div className="toast">{toast}</div>}
 
       {/* 헤더 */}
       <div className="header">
@@ -806,16 +1714,17 @@ function App() {
           Chart Sentinel
         </div>
         <div className="header-right">
-          <span className={`api-status ${apiKey || BASE_URL ? "api-ok" : "api-bad"}`}>
-            {BASE_URL ? "🟢 서버 연결" : apiKey ? "🟡 직접 호출" : "⚠ 키 없음"}
+          <span className={`api-status ${effectiveApiKey || baseUrl ? "api-ok" : "api-bad"}`}>
+            {baseUrl ? "🟢 서버 연결" : effectiveApiKey ? "🟡 직접 호출" : "⚠ 키 없음"}
           </span>
-          <button className="btn-ghost" onClick={() => setShowKeyModal(true)}>API 키 설정</button>
+          <button className="btn-ghost" onClick={() => setShowSettings(true)}>⚙ 설정</button>
+          <button className="btn-ghost" onClick={() => setShowKeyModal(true)}>API 키</button>
         </div>
       </div>
 
       {/* 탭 */}
       <div className="tabs">
-        {[["analysis","📊 분석"],["performance","📈 성과"],["monitor","👁 모니터"]].map(([id,label]) => (
+        {[["analysis","📊 분석"],["compare","⚖ 비교"],["performance","📈 성과"],["backtest","🔬 백테스트"],["portfolio","🏦 포트폴리오"],["monitor","👁 모니터"]].map(([id,label]) => (
           <button key={id} className={`tab${activeTab===id?" active":""}`} onClick={() => setActiveTab(id)}>{label}</button>
         ))}
       </div>
@@ -836,11 +1745,14 @@ function App() {
               {mode === "search" ? (
                 <>
                   <div className="search-wrap">
-                    <input className="search-input"
-                      placeholder="종목 검색 (NVDA, BTC, 삼성전자...)"
+                    <SearchAutocomplete
                       value={query}
-                      onChange={e => setQuery(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && !loading && handleAnalyze()} />
+                      onChange={setQuery}
+                      onSelect={(sym) => { setQuery(sym); }}
+                      onSubmit={handleAnalyze}
+                      loading={loading}
+                      prevTickers={prevTickers}
+                    />
                     <button className="btn-primary" onClick={handleAnalyze} disabled={loading || !query.trim()}>
                       {loading ? "분석 중..." : "분석"}
                     </button>
@@ -852,7 +1764,31 @@ function App() {
                   </div>
                   {query && (
                     <div style={{marginTop:16}}>
-                      <TradingViewWidget symbol={query.toUpperCase()} />
+                      <TradingViewWidget
+                        symbol={query.toUpperCase()}
+                        onCapture={baseUrl ? async (blob, err) => {
+                          if (loading) return;
+                          if (err || !blob) { setError(err || "캡처 실패"); return; }
+                          setError(""); setReport(null); setLoading(true); setLoadStep(1);
+                          try {
+                            const form = new FormData();
+                            form.append("file", blob, "capture.png");
+                            if (apiKey) form.append("api_key", apiKey);
+                            const resp = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: form });
+                            if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail); }
+                            setLoadStep(2);
+                            const data = await resp.json();
+                            setReport(data.report);
+                            setChartImage(data.chart_image || null);
+                            const id = addLog(data.report);
+                            setCurrentLogId(id);
+                          } catch (e) {
+                            setError(e.message || "분석 중 오류");
+                          } finally {
+                            setLoading(false);
+                          }
+                        } : null}
+                      />
                     </div>
                   )}
                 </>
@@ -892,10 +1828,21 @@ function App() {
           </div>
         )}
 
+        {/* 비교 탭 */}
+        {activeTab === "compare" && (
+          <CompareTab addLog={addLog} baseUrl={baseUrl} />
+        )}
+
         {/* 성과 탭 */}
         {activeTab === "performance" && (
-          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} />
+          <PerformanceTab logs={logs} onUpdateResult={updateLogResult} setHistoryModal={setHistoryModal} baseUrl={baseUrl} />
         )}
+
+        {/* 백테스팅 탭 */}
+        {activeTab === "backtest" && <BacktestTab />}
+
+        {/* 포트폴리오 탭 */}
+        {activeTab === "portfolio" && <PortfolioTab />}
 
         {/* 모니터 탭 */}
         {activeTab === "monitor" && (
@@ -913,7 +1860,9 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <ErrorBoundary><App /></ErrorBoundary>
+);
 </script>
 </body>
 </html>
