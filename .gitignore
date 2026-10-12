@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# 런타임 자동 생성 파일
+analysis_logs.csv
+watchlist.json
+portfolio.json
+
+# API 키가 내장된 개인용 빌드
+dist/*.local.html
+tools/.env.local

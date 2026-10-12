@@ -1,0 +1,13 @@
+{
+  "name": "chart-sentinel-build",
+  "private": true,
+  "description": "chart-sentinel-standalone.html 을 CDN 없이 열리는 단일 파일(dist/chart-sentinel.html)로 빌드",
+  "scripts": { "build": "node build.js" },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "terser": "^5.31.0"
+  }
+}
