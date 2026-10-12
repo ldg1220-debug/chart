@@ -587,58 +587,373 @@ function roundNumbers(price) {
   }));
 }
 
-function computeTechIndicators(ohlcv) {
+// ─── Timeframe presets (지표 기간 · 스윙 구간 · 투자기간) ───────────────────
+const TF_PRESETS = {
+  '5m':  {ma:[10,20,60],  rsi:7,  bb:10, swing:100, volScale:0.25, horizon:'초단기 (수 시간)',   setup:'데이 트레이드'},
+  '30m': {ma:[10,20,60],  rsi:14, bb:20, swing:100, volScale:0.4,  horizon:'단기 (1~2일)',       setup:'데이 트레이드'},
+  '4h':  {ma:[20,60,120], rsi:14, bb:20, swing:90,  volScale:0.8,  horizon:'단기 (수일~1주)',     setup:'스윙 트레이드'},
+  '1d':  {ma:[20,50,200], rsi:14, bb:20, swing:90,  volScale:1,    horizon:'중기 (수주~3개월)',   setup:'스윙 트레이드'},
+  '1w':  {ma:[5,20,60],   rsi:14, bb:20, swing:52,  volScale:2.2,  horizon:'장기 (수개월)',       setup:'포지션 트레이드'},
+  '1M':  {ma:[5,20,60],   rsi:14, bb:20, swing:36,  volScale:4.5,  horizon:'장기 (1년 이상)',     setup:'장기 투자'},
+};
+
+const currencySym = t => /\.(KS|KQ)$/i.test(t||'') ? '₩' : '$';
+function fmtPx(v, ticker) {
+  if (v == null || isNaN(v)) return '—';
+  const s = currencySym(ticker), a = Math.abs(v);
+  const txt = s === '₩' ? Number(v).toLocaleString(undefined,{maximumFractionDigits:0})
+            : a >= 1   ? Number(v).toLocaleString(undefined,{maximumFractionDigits:2})
+            :            Number(v).toPrecision(4);
+  return s + txt;
+}
+
+const _avg   = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+const _clamp = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+
+function emaSeries(arr, n) {
+  const out = Array(arr.length).fill(null);
+  if (arr.length < n) return out;
+  const k = 2/(n+1);
+  let prev = arr.slice(0,n).reduce((a,b)=>a+b,0)/n;
+  out[n-1] = prev;
+  for (let i=n; i<arr.length; i++) { prev = arr[i]*k + prev*(1-k); out[i] = prev; }
+  return out;
+}
+
+function macdSeries(closes) {
+  const e12 = emaSeries(closes,12), e26 = emaSeries(closes,26);
+  const macd = closes.map((_,i)=> (e12[i]!=null && e26[i]!=null) ? e12[i]-e26[i] : null);
+  const first = macd.findIndex(v=>v!=null);
+  const signal = Array(closes.length).fill(null);
+  if (first >= 0) emaSeries(macd.slice(first), 9).forEach((v,j)=>{ signal[first+j] = v; });
+  const hist = macd.map((m,i)=> (m!=null && signal[i]!=null) ? m-signal[i] : null);
+  return {macd, signal, hist};
+}
+
+function atrSeries(ohlcv, n=14) {
+  const out = Array(ohlcv.length).fill(null);
+  if (ohlcv.length < n+1) return out;
+  const tr = ohlcv.map((d,i)=> i===0 ? d.high-d.low
+    : Math.max(d.high-d.low, Math.abs(d.high-ohlcv[i-1].close), Math.abs(d.low-ohlcv[i-1].close)));
+  let prev = tr.slice(1,n+1).reduce((a,b)=>a+b,0)/n;
+  out[n] = prev;
+  for (let i=n+1; i<ohlcv.length; i++) { prev = (prev*(n-1)+tr[i])/n; out[i] = prev; }
+  return out;
+}
+
+function swingPivots(ohlcv, w=4, lookback=160) {
+  const n = ohlcv.length, highs = [], lows = [];
+  for (let i=Math.max(w, n-lookback); i<n-w; i++) {
+    let isH = true, isL = true;
+    for (let j=i-w; j<=i+w; j++) {
+      if (j===i) continue;
+      if (ohlcv[j].high > ohlcv[i].high) isH = false;
+      if (ohlcv[j].low  < ohlcv[i].low)  isL = false;
+    }
+    if (isH) highs.push({i, price: ohlcv[i].high});
+    if (isL) lows.push({i,  price: ohlcv[i].low});
+  }
+  return {highs, lows};
+}
+
+// 상승 스윙(저→고): 되돌림은 고점 아래 지지, 확장은 고점 위 목표
+// 하락 스윙(고→저): 되돌림은 저점 위 반등 저항, 확장은 저점 아래 목표
+function fibSet(high, low, upSwing, current) {
+  const range = high - low;
+  const mk = (r, price) => ({level:r, price, pct:(price/current-1)*100});
+  const fibs = [0.236,0.382,0.5,0.618,0.786].map(r => mk(r, upSwing ? high-range*r : low+range*r));
+  const exts = [1.272,1.414,1.618,2.0,2.618].map(r => mk(r, upSwing ? low+range*r : high-range*r)).filter(f=>f.price>0);
+  return {fibs, exts};
+}
+
+// 지지/저항 후보 병합 (MA·BB·피보·스윙·라운드), 인접 레벨은 ATR 기준으로 합침
+function collectLevels(price, a, src) {
+  const raw = [];
+  src.maSet.forEach(m => { if (m.v!=null) raw.push({price:m.v, src:`MA${m.n}`}); });
+  if (src.bb) { raw.push({price:src.bb.upper, src:'BB상단'}, {price:src.bb.lower, src:'BB하단'}, {price:src.bb.mid, src:'BB중단'}); }
+  src.fibs.forEach(f => raw.push({price:f.price, src:`Fib ${f.level}`}));
+  src.swing.highs.slice(-6).forEach(p => raw.push({price:p.price, src:'스윙 고점'}));
+  src.swing.lows.slice(-6).forEach(p  => raw.push({price:p.price, src:'스윙 저점'}));
+  src.rounds.forEach(r => raw.push({price:r.level, src:'라운드'}));
+  const pick = (list) => {
+    const out = [];
+    for (const l of list) {
+      const dup = out.find(o => Math.abs(o.price-l.price) < 0.35*a);
+      if (dup) { if (!dup.src.includes(l.src)) dup.src += '·'+l.src; }
+      else out.push({...l});
+      if (out.length >= 5) break;
+    }
+    return out;
+  };
+  const supports = pick(raw.filter(l=>l.price < price*0.999).sort((x,y)=>y.price-x.price));
+  const resistances = pick(raw.filter(l=>l.price > price*1.001).sort((x,y)=>x.price-y.price));
+  return {supports, resistances};
+}
+
+// 롱/숏 분기 매매 플랜: 진입=현재가 근처 레벨, 손절=ATR·스윙 중 가까운 쪽, 목표=구조 레벨 또는 R배수
+function buildTradePlan(dir, price, a, levels, swing, fibExts) {
+  const side = dir==='long' ? 1 : -1;
+  const near = (dir==='long' ? levels.supports : levels.resistances)
+    .filter(l => { const d = Math.abs(l.price-price); return d >= 0.15*a && d <= 3*a; });
+  const entryMode = near.length ? 'limit' : 'market';
+  const entry1 = near.length ? near[0].price : price;
+  const e2c = near.find(l => Math.abs(l.price-entry1) >= 0.5*a);
+  const entry2 = e2c ? e2c.price : entry1 - side*a;
+
+  const atrStop = entry1 - side*1.5*a;
+  const swList = dir==='long' ? swing.lows : swing.highs;
+  const cand = [atrStop];
+  const sw = swList.filter(p => dir==='long' ? p.price < entry1 - 0.3*a : p.price > entry1 + 0.3*a)
+                   .sort((x,y)=> dir==='long' ? y.price-x.price : x.price-y.price)[0];
+  if (sw) cand.push(sw.price - side*0.2*a);
+  const valid = cand.filter(s => Math.abs(entry1-s) >= 0.8*a);
+  let stopLoss = (valid.length ? valid : [atrStop]).sort((x,y)=>Math.abs(entry1-x)-Math.abs(entry1-y))[0];
+  if (stopLoss <= 0) stopLoss = entry1 * 0.5;
+  const R = Math.abs(entry1 - stopLoss);
+
+  const targets = [
+    ...(dir==='long' ? levels.resistances : levels.supports).map(l=>l.price),
+    ...fibExts.map(f=>f.price),
+    ...(dir==='long' ? swing.highs : swing.lows).map(p=>p.price),
+  ].filter(p => p>0 && side*(p-entry1) > 0).sort((x,y)=>side*(x-y));
+  const pickT = (minR, floorPrice, fallbackR) => {
+    const t = targets.find(p => side*(p-entry1) >= minR*R && (floorPrice==null || side*(p-floorPrice) >= 0.5*R));
+    return t != null ? t : entry1 + side*fallbackR*R;
+  };
+  const profit1 = pickT(1.2, null, 1.5);
+  const profit2 = pickT(2.2, profit1, 2.5);
+  const profit3 = pickT(3.5, profit2, 4);
+  const rr = p => R>0 ? Math.abs(p-entry1)/R : null;
+  return {direction:dir, entryMode, entry1, entry2, stopLoss, profit1:Math.max(profit1,0), profit2:Math.max(profit2,0), profit3:Math.max(profit3,0),
+          rr1:rr(profit1), rr2:rr(profit2), rr3:rr(profit3), atr:a, riskPct:R/entry1*100};
+}
+
+// 규칙 기반 점수 (-100 ~ +100): 포지션/신뢰도는 AI가 아니라 이 점수가 결정
+function computeScore(o) {
+  const {price, closes, ohlcv, maSet, macd, rsiV, bb, atrPct} = o;
+  const n = closes.length;
+  const comps = [];
+  const add = (key, label, weight, value, note) => {
+    const v = _clamp(value, -1, 1), contrib = v*weight;
+    comps.push({key, label, weight, value:v, contrib, note,
+      tone: contrib > 0.15*weight ? 'pos' : contrib < -0.15*weight ? 'neg' : 'neu'});
+  };
+
+  // 1) 이동평균 위치 + 배열 (거리는 ATR로 정규화 — 미세한 차이는 중립 처리)
+  const atrAbs = atrPct * price;
+  const mv = maSet.map(m=>m.v);
+  const parts = [];
+  mv.forEach(v => { if (v!=null && atrAbs>0) parts.push(_clamp((price - v)/(1.5*atrAbs), -1, 1)); });
+  const known = mv.filter(v=>v!=null);
+  if (known.length >= 2 && atrAbs>0) {
+    const gap = 0.3*atrAbs;                                       // 인접 MA 간격이 0.3 ATR 이상일 때만 배열로 인정
+    const asc  = known.every((v,i)=> i===0 || known[i-1] - v > gap);   // 단기>중기>장기 = 정배열
+    const desc = known.every((v,i)=> i===0 || v - known[i-1] > gap);
+    parts.push(asc ? 1 : desc ? -1 : 0);
+  }
+  const maVal = parts.length ? _avg(parts) : 0;
+  add('ma','이동평균 위치·배열', 30, maVal,
+    maVal > 0.5 ? '이동평균 정배열·상승 우위' : maVal < -0.5 ? '이동평균 역배열·하락 우위' : '이동평균 혼조');
+
+  // 2) 추세 기울기 (단기 MA 10봉 변화율 / 변동성)
+  const m1 = maSet[0] && n > maSet[0].n + 10 ? movingAverage(closes, maSet[0].n) : null;
+  let slopeVal = 0;
+  if (m1 && m1[n-1]!=null && m1[n-11]!=null && atrPct > 0) {
+    slopeVal = (m1[n-1]/m1[n-11]-1) / (atrPct*3);
+  }
+  add('slope','추세 기울기', 10, slopeVal, slopeVal > 0.3 ? '단기 추세선 상승 중' : slopeVal < -0.3 ? '단기 추세선 하락 중' : '추세 횡보');
+
+  // 3) 모멘텀 (20봉 수익률 / 변동성)
+  let momVal = 0, ret20 = null;
+  if (n > 21 && atrPct > 0) {
+    ret20 = closes[n-1]/closes[n-21]-1;
+    momVal = ret20 / (atrPct*Math.sqrt(20)*1.5);
+  }
+  add('mom','모멘텀(20봉)', 10, momVal,
+    ret20==null ? '모멘텀 데이터 부족' : `20봉 수익률 ${(ret20*100>=0?'+':'')}${(ret20*100).toFixed(1)}%`);
+
+  // 4) RSI 구간 (과열은 감점, 과매도는 반등 여지로 소폭 가점)
+  let rsiVal = 0, rsiNote = 'RSI 데이터 부족';
+  if (rsiV != null) {
+    const r = rsiV;
+    if (r >= 80) { rsiVal = -0.4; rsiNote = `RSI ${r.toFixed(0)} 극단 과열`; }
+    else if (r >= 70) { rsiVal = -0.15; rsiNote = `RSI ${r.toFixed(0)} 과매수권`; }
+    else if (r >= 55) { rsiVal = 0.6; rsiNote = `RSI ${r.toFixed(0)} 강세 구간`; }
+    else if (r >= 45) { rsiVal = 0; rsiNote = `RSI ${r.toFixed(0)} 중립`; }
+    else if (r >= 30) { rsiVal = -0.6; rsiNote = `RSI ${r.toFixed(0)} 약세 구간`; }
+    else if (r >= 20) { rsiVal = 0.15; rsiNote = `RSI ${r.toFixed(0)} 과매도권`; }
+    else { rsiVal = 0.3; rsiNote = `RSI ${r.toFixed(0)} 극단 과매도`; }
+  }
+  add('rsi','RSI', 10, rsiVal, rsiNote);
+
+  // 5) MACD (히스토그램 방향 + 0선 위치)
+  let macdVal = 0, macdNote = 'MACD 데이터 부족';
+  const mLast = macd.macd[n-1], hLast = macd.hist[n-1];
+  if (mLast!=null && hLast!=null) {
+    macdVal = 0.6*Math.sign(hLast) + 0.4*Math.sign(mLast);
+    macdNote = `MACD ${mLast>=0?'0선 위':'0선 아래'}·히스토그램 ${hLast>=0?'양(+)':'음(−)'}`;
+  }
+  add('macd','MACD', 15, macdVal, macdNote);
+
+  // 6) 볼린저 %B
+  let bbVal = 0, bbNote = '볼린저 데이터 부족';
+  if (bb && bb.upper > bb.lower) {
+    const pb = (price-bb.lower)/(bb.upper-bb.lower);
+    if (pb > 1) { bbVal = -0.15; bbNote = '볼린저 상단 이탈(과열)'; }
+    else if (pb >= 0.55) { bbVal = (pb-0.5)*2; bbNote = '볼린저 상단부 (강세)'; }
+    else if (pb >= 0.45) { bbVal = 0; bbNote = '볼린저 중단 부근'; }
+    else if (pb >= 0) { bbVal = -(0.5-pb)*2; bbNote = '볼린저 하단부 (약세)'; }
+    else { bbVal = 0.15; bbNote = '볼린저 하단 이탈(과매도)'; }
+  }
+  add('bb','볼린저 %B', 10, bbVal, bbNote);
+
+  // 7) 거래량 방향성 (최근 20봉 상승봉/하락봉 거래량 비중)
+  let volVal = 0, volNote = '거래량 데이터 없음';
+  const last20 = ohlcv.slice(-20);
+  const upV = last20.filter(d=>d.close>=d.open).reduce((s,d)=>s+(d.volume||0),0);
+  const dnV = last20.filter(d=>d.close< d.open).reduce((s,d)=>s+(d.volume||0),0);
+  if (upV+dnV > 0) {
+    const ratio = upV/(upV+dnV);
+    volVal = (ratio-0.5)*3;
+    volNote = ratio > 0.6 ? `상승봉 거래량 우세 (${(ratio*100).toFixed(0)}%)` : ratio < 0.4 ? `하락봉 거래량 우세 (${(ratio*100).toFixed(0)}%)` : `거래량 균형 (상승봉 ${(ratio*100).toFixed(0)}%)`;
+  }
+  add('vol','거래량 방향', 15, volVal, volNote);
+
+  const score = Math.round(comps.reduce((s,c)=>s+c.contrib, 0));
+  const position = score >= 25 ? 'long' : score <= -25 ? 'short' : 'hold';
+  const confidence = position === 'hold' ? 50 : _clamp(Math.round(50 + Math.abs(score)*0.5), 50, 95);
+  const top = [...comps].sort((a,b)=>Math.abs(b.contrib)-Math.abs(a.contrib)).slice(0,4);
+  return {score, position, confidence, comps,
+          signals: top.map(c=>c.note), signalsTone: top.map(c=>c.tone)};
+}
+
+// 로컬에서 계산한 "사실" — AI가 지어내지 않도록 프롬프트에 그대로 전달
+const _pxs = v => v==null||isNaN(v) ? '-' : Math.abs(v)>=1 ? Number(v).toLocaleString(undefined,{maximumFractionDigits:2}) : Number(v).toPrecision(4);
+function buildFacts(o) {
+  const {ohlcv, closes, maSet, macd, rsiArr, swing, atrV, price, P} = o;
+  const n = closes.length, f = [];
+  const ser = P.ma.map(p => movingAverage(closes, p));
+  if (ser[0] && ser[1]) {
+    for (let k=n-1; k>=Math.max(1,n-40); k--) {
+      const a = ser[0][k], b = ser[1][k], pa = ser[0][k-1], pb = ser[1][k-1];
+      if (a==null||b==null||pa==null||pb==null) continue;
+      if (a-b > 0 && pa-pb <= 0) { f.push(`MA${P.ma[0]}이 MA${P.ma[1]}를 상향 돌파(골든크로스) — ${n-1-k}봉 전`); break; }
+      if (a-b < 0 && pa-pb >= 0) { f.push(`MA${P.ma[0]}이 MA${P.ma[1]}를 하향 돌파(데드크로스) — ${n-1-k}봉 전`); break; }
+    }
+  }
+  for (let k=n-1; k>=Math.max(1,n-5); k--) {
+    const h = macd.hist[k], ph = macd.hist[k-1];
+    if (h==null||ph==null) continue;
+    if (h > 0 && ph <= 0) { f.push(`MACD 시그널 상향 교차 — ${n-1-k}봉 전`); break; }
+    if (h < 0 && ph >= 0) { f.push(`MACD 시그널 하향 교차 — ${n-1-k}봉 전`); break; }
+  }
+  // RSI 다이버전스 (최근 두 스윙 기준)
+  let div = null;
+  const ph = swing.highs.slice(-2), pl = swing.lows.slice(-2);
+  if (ph.length===2 && n-1-ph[1].i <= 40) {
+    const r1 = rsiArr[ph[0].i], r2 = rsiArr[ph[1].i];
+    if (r1!=null && r2!=null && ph[1].price > ph[0].price && r2 < r1-2) div = '약세 다이버전스 (가격 고점은 높아졌지만 RSI 고점은 낮아짐)';
+  }
+  if (!div && pl.length===2 && n-1-pl[1].i <= 40) {
+    const r1 = rsiArr[pl[0].i], r2 = rsiArr[pl[1].i];
+    if (r1!=null && r2!=null && pl[1].price < pl[0].price && r2 > r1+2) div = '강세 다이버전스 (가격 저점은 낮아졌지만 RSI 저점은 높아짐)';
+  }
+  f.push(div ? `RSI ${div}` : 'RSI 다이버전스: 감지되지 않음');
+  const vols = ohlcv.map(d=>d.volume||0);
+  const v5 = _avg(vols.slice(-5)), v20 = _avg(vols.slice(-20)), v60 = _avg(vols.slice(-60));
+  if (v20 > 0) {
+    f.push(`최근 5봉 평균 거래량은 20봉 평균의 ${(v5/v20).toFixed(2)}배`);
+    if (v60 > 0) f.push(`20봉 평균 거래량은 60봉 평균의 ${(v20/v60).toFixed(2)}배`);
+  }
+  const lh = swing.highs[swing.highs.length-1], ll = swing.lows[swing.lows.length-1];
+  if (lh) f.push(`직전 스윙 고점 ${_pxs(lh.price)} (${n-1-lh.i}봉 전)`);
+  if (ll) f.push(`직전 스윙 저점 ${_pxs(ll.price)} (${n-1-ll.i}봉 전)`);
+  if (atrV) f.push(`ATR(14) ${_pxs(atrV)} = 현재가의 ${(atrV/price*100).toFixed(2)}%`);
+  return f;
+}
+
+function computeTechIndicators(ohlcv, opts={}) {
   if (!ohlcv || ohlcv.length < 2) return null;
+  const tfId = TF_PRESETS[opts.tf] ? opts.tf : '1d';
+  const P = TF_PRESETS[tfId];
   const closes = ohlcv.map(d => d.close);
   const n = closes.length;
-  const last = v => Array.isArray(v) ? v[n - 1] : null;
+  const price = opts.price != null ? opts.price : closes[n-1];
+  const lastOf = a => a[n-1];
 
-  const ma20  = last(movingAverage(closes, 20));
-  const ma30  = last(movingAverage(closes, 30));
-  const ma50  = last(movingAverage(closes, 50));
-  const ma99  = last(movingAverage(closes, 99));
-  const ma200 = last(movingAverage(closes, 200));
+  const maSeries = P.ma.map(p => movingAverage(closes, p));
+  const maSet = P.ma.map((p,i) => ({n:p, v:maSeries[i][n-1]}));
+  const ma = {
+    ma20: lastOf(movingAverage(closes,20)), ma30: lastOf(movingAverage(closes,30)),
+    ma50: lastOf(movingAverage(closes,50)), ma99: lastOf(movingAverage(closes,99)),
+    ma200: lastOf(movingAverage(closes,200)),
+  };
+  const vwma20v = lastOf(vwma(ohlcv,20)), vwma100v = lastOf(vwma(ohlcv,100));
 
-  const vwma20v  = last(vwma(ohlcv, 20));
-  const vwma100v = last(vwma(ohlcv, 100));
+  const bbAll = bollingerBands(closes, P.bb, 2);
+  const bbLast = bbAll[n-1];
+  const rsiArr = rsi(closes, P.rsi);
+  const rsi14v = rsiArr[n-1];
+  const macd = macdSeries(closes);
+  const atrArr = atrSeries(ohlcv, 14);
+  const atrV = atrArr[n-1] || price*0.02;
+  const atrPct = atrV/price;
+  const swing = swingPivots(ohlcv, 4, 160);
 
-  const bbAll = bollingerBands(closes, 20, 2);
-  const bbLast = bbAll[n - 1];
+  // 피보나치: 최근 swing 구간의 고/저와 선후 관계로 상승/하락 스윙 판별
+  const win = ohlcv.slice(-Math.min(P.swing, n));
+  let hi = -Infinity, lo = Infinity, hiI = 0, loI = 0;
+  win.forEach((d,i)=>{ if (d.high>hi){hi=d.high;hiI=i;} if (d.low<lo){lo=d.low;loI=i;} });
+  const upSwing = hiI > loI;
+  const {fibs, exts: fibExts} = fibSet(hi, lo, upSwing, price);
+  const rounds = roundNumbers(price);
 
-  const rsi14All = rsi(closes, 14);
-  const rsi14v   = rsi14All[n - 1];
+  const levels = collectLevels(price, atrV, {maSet, bb:bbLast, fibs, swing, rounds});
+  const sc = computeScore({price, closes, ohlcv, maSet, macd, rsiV:rsi14v, bb:bbLast, atrPct});
+  const planDir = sc.score >= 0 ? 'long' : 'short';
+  const tradePlan = buildTradePlan(planDir, price, atrV, levels, swing, fibExts);
+  const facts = buildFacts({ohlcv, closes, maSet, macd, rsiArr, swing, atrV, price, P});
 
-  const price = closes[n - 1];
-  const ohlcv90 = ohlcv.slice(-90);
-  const high90  = Math.max(...ohlcv90.map(d => d.high));
-  const low90   = Math.min(...ohlcv90.map(d => d.low));
-
-  const fibs    = fibRetracements(high90, low90, price);
-  const fibExts = fibExtensions(low90, high90, price);
-  const rounds  = roundNumbers(price);
-
-  // Trade plan
-  const entry1   = fibs[0].price; // Fib 0.236
-  const entry2   = fibs[1].price; // Fib 0.382
-  const stopRaw  = low90 * 0.97;  // just below 90d low
-  const profit1  = fibExts[0].price; // Ext 1.272
-  const profit2  = fibExts[2].price; // Ext 1.618
-  const profit3  = fibExts[4].price; // Ext 2.618
-  const rr1 = entry1 > stopRaw ? (profit1 - entry1) / (entry1 - stopRaw) : null;
-  const rr2 = entry1 > stopRaw ? (profit2 - entry1) / (entry1 - stopRaw) : null;
-  const rr3 = entry1 > stopRaw ? (profit3 - entry1) / (entry1 - stopRaw) : null;
+  const vols = ohlcv.map(d=>d.volume||0);
+  const v5 = _avg(vols.slice(-5)), v20 = _avg(vols.slice(-20)), v60 = _avg(vols.slice(-60));
+  const volTrend = v20 > 0 ? {r5_20: v5/v20, r20_60: v60>0 ? v20/v60 : null} : null;
+  const scaled = atrPct*100/P.volScale;
+  const riskLevel = scaled < 2.5 ? 'low' : scaled < 5.5 ? 'medium' : 'high';
 
   return {
-    price,
-    ma: { ma20, ma30, ma50, ma99, ma200 },
-    vwma: { vwma20: vwma20v, vwma100: vwma100v },
-    bb: bbLast ? { upper: bbLast.upper, mid: bbLast.mid, lower: bbLast.lower } : null,
-    rsi14: rsi14v,
-    fib90: { high: high90, low: low90 },
-    fibs,
-    fibExts,
-    rounds,
-    tradePlan: { entry1, entry2, stopLoss: stopRaw, profit1, profit2, profit3, rr1, rr2, rr3 },
+    tf: tfId, price, ma, maSet,
+    vwma: {vwma20: vwma20v, vwma100: vwma100v},
+    bb: bbLast ? {upper:bbLast.upper, mid:bbLast.mid, lower:bbLast.lower} : null,
+    rsi14: rsi14v, rsiPeriod: P.rsi,
+    macd: {macd: macd.macd[n-1], signal: macd.signal[n-1], hist: macd.hist[n-1]},
+    atr: atrV, atrPct: atrPct*100,
+    volTrend, fib90: {high:hi, low:lo}, fibDir: upSwing ? 'up' : 'down', swingBars: win.length,
+    fibs, fibExts, rounds, levels, tradePlan, facts,
+    score: sc.score, scoreBreakdown: sc.comps,
+    verdict: {position: sc.position, confidence: sc.confidence},
+    signals: sc.signals, signalsTone: sc.signalsTone, riskLevel,
+  };
+}
+
+// 지표 계산용 캔들: 코인은 마지막(진행 중) 캔들을 제외, 현재가는 마지막 종가 유지
+function prepareCandles(ohlcv, type) {
+  const price = ohlcv[ohlcv.length-1]?.close;
+  const closed = (type === 'crypto' && ohlcv.length > 40) ? ohlcv.slice(0,-1) : ohlcv;
+  return {closed, price};
+}
+
+function buildLocalReport(p1) {
+  const c = p1.computed, P = TF_PRESETS[p1.tfId] || TF_PRESETS['1d'];
+  const tf = TIMEFRAMES.find(t=>t.id===p1.tfId);
+  return {
+    ticker: p1.ticker, price: p1.price, computed: c, tfId: p1.tfId, tfLabel: tf ? tf.label : '일봉',
+    position: c.verdict.position, confidence: c.verdict.confidence,
+    score: c.score, scoreBreakdown: c.scoreBreakdown,
+    signals: c.signals, signalsTone: c.signalsTone,
+    support: c.levels.supports[0]?.price ?? null,
+    resistance: c.levels.resistances[0]?.price ?? null,
+    target_price: c.tradePlan.profit1, stop_loss: c.tradePlan.stopLoss,
+    risk_level: c.riskLevel, time_horizon: P.horizon, setup_type: P.setup, _local: true,
   };
 }
 
@@ -1496,11 +1811,11 @@ async function generateChartImage(ohlcv, ticker) {
 
 // ─── Google Gemini API ────────────────────────────────────────────────────────
 // 우선순위: Cloudflare Worker 프록시 > DEPLOY_KEY(직접) > 사용자 키(직접)
-async function callGemini(model, parts, userApiKey) {
+async function callGemini(model, parts, userApiKey, opts={}) {
   const body = {
     model,  // Worker에서 추출, Gemini URL에 사용
     contents: [{parts}],
-    generationConfig: {temperature: 0.7, maxOutputTokens: 8192},
+    generationConfig: {temperature: opts.temperature ?? 0.7, maxOutputTokens: 8192},
   };
 
   let resp;
@@ -1655,102 +1970,6 @@ ${visionText}
   }
 }
 
-async function callGeminiCombined(chartB64, ticker, price, apiKey, computed, timeframeLabel='일봉') {
-  const fmt = v => v != null ? Number(v).toLocaleString(undefined,{maximumFractionDigits:4}) : 'N/A';
-  const fmtPct = v => v != null ? (v > 0 ? `+${v.toFixed(1)}%` : `${v.toFixed(1)}%`) : '';
-
-  const tfContext = timeframeLabel.includes('분')
-    ? `단기(${timeframeLabel}) 차트 — 단기 변동성·매수매도 압력·추세 전환 집중 분석`
-    : timeframeLabel.includes('시간')
-    ? `중단기(${timeframeLabel}) 차트 — 중기 추세 지속·지지저항 돌파 집중 분석`
-    : (timeframeLabel==='주봉'||timeframeLabel==='월봉')
-    ? `장기(${timeframeLabel}) 차트 — 장기 추세·거시적 관점·대형 패턴 집중 분석`
-    : `중기(${timeframeLabel}) 차트 — 중기 추세·모멘텀·주요 지지저항 집중 분석`;
-
-  let computedCtx = '';
-  if (computed) {
-    const {ma, vwma: vw, bb, rsi14, fibs, fibExts, tradePlan} = computed;
-    computedCtx = `
-[계산된 기술 지표]
-현재가: $${fmt(price)}
-RSI(14): ${rsi14 != null ? rsi14.toFixed(1) : 'N/A'}
-MA20: $${fmt(ma.ma20)} (${ma.ma20 && price ? (price > ma.ma20 ? '가격위↑' : '가격아래↓') : ''})
-MA50: $${fmt(ma.ma50)} (${ma.ma50 && price ? (price > ma.ma50 ? '가격위↑' : '가격아래↓') : ''})
-MA99: $${fmt(ma.ma99)} (${ma.ma99 && price ? (price > ma.ma99 ? '가격위↑' : '가격아래↓') : ''})
-MA200: $${fmt(ma.ma200)} (${ma.ma200 && price ? (price > ma.ma200 ? '가격위↑' : '가격아래↓') : ''})
-VWMA100: $${fmt(vw.vwma100)} (${vw.vwma100 && price ? (price > vw.vwma100 ? '세력 평단 초과' : '세력 평단 미달') : ''})
-BB상단: $${fmt(bb?.upper)} / BB중간: $${fmt(bb?.mid)} / BB하단: $${fmt(bb?.lower)}
-
-[피보나치 되돌림 (90일 저→고)]
-${fibs.map(f => `Fib ${f.level}: $${fmt(f.price)} (${fmtPct(f.pct)})`).join('\n')}
-
-[피보나치 확장 (상승 목표)]
-${fibExts.map(f => `Ext ${f.level}: $${fmt(f.price)} (${fmtPct(f.pct)})`).join('\n')}
-
-[매매 플랜]
-1차 진입: $${fmt(tradePlan.entry1)} (Fib 0.236)
-2차 진입: $${fmt(tradePlan.entry2)} (Fib 0.382)
-손절: $${fmt(tradePlan.stopLoss)}
-익절1: $${fmt(tradePlan.profit1)} (RR=${tradePlan.rr1 != null ? tradePlan.rr1.toFixed(1)+'x' : 'N/A'})
-익절2: $${fmt(tradePlan.profit2)} (RR=${tradePlan.rr2 != null ? tradePlan.rr2.toFixed(1)+'x' : 'N/A'})
-익절3: $${fmt(tradePlan.profit3)} (RR=${tradePlan.rr3 != null ? tradePlan.rr3.toFixed(1)+'x' : 'N/A'})
-`;
-  }
-
-  const prompt = `당신은 전문 퀀트 애널리스트입니다.
-종목: ${ticker}  |  현재가: ${price ? '$'+price.toLocaleString() : '미확인'}  |  타임프레임: [${timeframeLabel}] (${tfContext})
-${computedCtx}
-⚠️ 중요: 모든 텍스트 필드 값은 반드시 한국어로만 작성하세요. 영어 혼용 금지.
-
-${chartB64 ? '위 차트 이미지와 기술 지표를' : '위 기술 지표를'} 종합 분석하여 투자자가 즉시 행동 방향을 알 수 있도록 아래 JSON 형식으로만 출력하세요 (마크다운, 설명 텍스트 없이 JSON만):
-{
-  "ticker": "${ticker}",
-  "price": ${price || null},
-  "position": "long 또는 short 또는 hold 또는 none",
-  "confidence": 0~100 사이 숫자,
-  "summary": "현재 상황 핵심 해석 3~5문장. 지금 시장이 어떤 상태이며 왜 그런지, 투자자에게 무엇을 의미하는지, 지금 무엇을 해야 하는지 명확히. 마크다운 없이 평문.",
-  "trend": "단기/중기/장기 추세 방향과 강도, 현재 추세 지속 가능성과 매매 타이밍 의미 해석.",
-  "ma_status": "이동평균선 배열 강세/약세 여부, 핵심 지지·저항 MA, 이탈 시 시나리오 해석.",
-  "volume_analysis": "거래량이 추세를 컨펌하는지 다이버전스인지, 매매 신호로서 의미 해석.",
-  "elliott_wave": "현재 파동 단계와 다음 움직임 예상, 진입 적기인지 관망 구간인지 해석.",
-  "bollinger": "볼린저밴드 위치·밴드폭 상태가 향후 변동성·방향성에 대해 무엇을 말하는지.",
-  "rsi_signal": "RSI 수준의 과매수/과매도, 반등/추가하락 확률, 다이버전스 여부 해석.",
-  "technical": "모든 지표 종합 시 가장 강력한 매매 근거와 최대 리스크 요인, 시나리오별 핵심 조건.",
-  "support": 핵심 지지가 숫자 또는 null,
-  "resistance": 핵심 저항가 숫자 또는 null,
-  "target_price": 목표가 숫자 또는 null,
-  "stop_loss": 손절가 숫자 또는 null,
-  "risk_level": "low 또는 medium 또는 high",
-  "signals": ["가장 중요한 매매 신호 3~4개. 각 10자 이내 한국어 문구 (예: '강력 매수 신호', 'MA50 상향 돌파', 'RSI 과매도 반등')"],
-  "time_horizon": "단기(1~2주) 또는 중기(1~3개월) 또는 장기(3개월 이상)",
-  "setup_type": "스윙 트레이드 또는 데이 트레이드 또는 장기 투자",
-  "recommendation": "지금 취해야 할 구체적 행동과 이유. 진입 조건, 손절 조건, 목표 수익 관리 방법 포함. 마크다운 없이 평문."
-}`;
-
-  const parts = [];
-  if (chartB64) parts.push({inline_data: {mime_type: 'image/png', data: chartB64}});
-  parts.push({text: prompt});
-
-  const text = await callGemini(GEMINI_VISION_MODEL, parts, apiKey);
-  try {
-    const cleaned = text.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'').trim();
-    const m = cleaned.match(/\{[\s\S]*\}/);
-    if (!m) return {summary: cleaned.slice(0, 400), position:'hold', confidence:50};
-    return JSON.parse(m[0]);
-  } catch(e) {
-    try {
-      const m2 = text.match(/\{[\s\S]*/);
-      if (m2) {
-        let partial = m2[0];
-        if ((partial.match(/"/g)||[]).length % 2 !== 0) partial += '"';
-        partial += '}';
-        return JSON.parse(partial);
-      }
-    } catch {}
-    return {summary: text.replace(/^```(?:json)?\s*/,'').replace(/[{}"]/g,'').slice(0,500).trim()||'분석 오류', position:'hold', confidence:50};
-  }
-}
-
 async function analyzeDirectly(query, apiKey) {
   const prompt = `당신은 전문 퀀트 애널리스트입니다. "${query}" 종목에 대해 최신 시장 정보를 바탕으로 분석하세요.
 차트 데이터 없이 텍스트 기반 분석임을 명시하고, 알려진 정보 범위 내에서 분석합니다.
@@ -1784,93 +2003,161 @@ async function analyzeDirectly(query, apiKey) {
 const callClaudeVision = callGeminiVision;
 const callClaudeReport = callGeminiReport;
 
-// ─── Phase 1: Fast data + indicator fetch ────────────────────────────────────
-async function fetchAnalysisPhase1(query, mode='auto') {
+// AI에는 "계산된 사실 + 최근 캔들"만 전달. 포지션·신뢰도·가격대는 로컬 엔진이 확정하고 AI는 해설만 담당.
+function buildAiContext(p1) {
+  const c = p1.computed, candles = p1.candles;
+  const tf = TIMEFRAMES.find(t=>t.id===p1.tfId);
+  const f = v => v==null||isNaN(v) ? '-' : (Math.abs(v)>=100 ? v.toFixed(1) : Math.abs(v)>=1 ? v.toFixed(3) : Number(v).toPrecision(4));
+  const unit = currencySym(p1.ticker)==='₩' ? 'KRW' : 'USD';
+  const rows = candles.slice(-40);
+  const v20 = _avg(candles.slice(-20).map(d=>d.volume||0)) || 0;
+  const table = rows.map(d => `${String(d.date).slice(2,16)} | ${f(d.open)} ${f(d.high)} ${f(d.low)} ${f(d.close)} | ${v20>0 ? ((d.volume||0)/v20).toFixed(2)+'x' : '-'}`).join('\n');
+  const posKo = {long:'롱(상승 우위)', short:'숏(하락 우위)', hold:'관망(중립)'}[c.verdict.position];
+  const comps = c.scoreBreakdown.map(x => `- ${x.label}: ${x.note} (기여 ${x.contrib>=0?'+':''}${x.contrib.toFixed(1)} / 가중 ${x.weight})`).join('\n');
+  const maLine = c.maSet.map(m => `MA${m.n}: ${f(m.v)}${m.v!=null ? (p1.price>m.v?' (현재가 위)':' (현재가 아래)') : ''}`).join(' / ');
+  const m = c.macd;
+  const plan = c.tradePlan;
+  const lv = (arr) => arr.map(l=>`${f(l.price)}[${l.src}]`).join(', ') || '없음';
+  return {
+    tfLabel: tf ? tf.label : '일봉', unit, posKo,
+    text: `[분석 대상] ${p1.ticker} | 타임프레임 ${tf ? tf.label : '일봉'} | 가격 단위 ${unit} | 현재가 ${f(p1.price)}
+
+[확정된 지표 결론 — 변경 불가]
+지표 점수 ${c.score} / ±100 → ${posKo}, 신뢰도 ${c.verdict.confidence}% (롱 ≥ +25, 숏 ≤ −25, 그 사이 관망)
+${comps}
+
+[계산된 지표]
+${maLine}
+RSI(${c.rsiPeriod}): ${c.rsi14!=null ? c.rsi14.toFixed(1) : 'N/A'}
+MACD: ${f(m.macd)} / 시그널 ${f(m.signal)} / 히스토그램 ${f(m.hist)}
+볼린저밴드: 상단 ${f(c.bb?.upper)} / 중단 ${f(c.bb?.mid)} / 하단 ${f(c.bb?.lower)}
+ATR(14): ${f(c.atr)} (현재가의 ${c.atrPct.toFixed(2)}%)
+스윙 구간(${c.swingBars}봉): ${c.fibDir==='up'?'상승':'하락'} 스윙, 고 ${f(c.fib90.high)} / 저 ${f(c.fib90.low)}
+
+[로컬 계산 사실]
+${c.facts.map(x=>'- '+x).join('\n')}
+
+[핵심 가격대 (로컬 계산)]
+지지: ${lv(c.levels.supports)}
+저항: ${lv(c.levels.resistances)}
+
+[매매 플랜 (로컬 계산, ${plan.direction==='long'?'롱':'숏'} 시나리오)]
+진입1 ${f(plan.entry1)} (${plan.entryMode==='market'?'현재가 부근':'지정가'}) / 진입2 ${f(plan.entry2)} / 손절 ${f(plan.stopLoss)} (리스크 ${plan.riskPct.toFixed(2)}%)
+익절1 ${f(plan.profit1)} (R:R ${plan.rr1?.toFixed(2)}) / 익절2 ${f(plan.profit2)} (R:R ${plan.rr2?.toFixed(2)}) / 익절3 ${f(plan.profit3)} (R:R ${plan.rr3?.toFixed(2)})
+
+[최근 ${rows.length}봉 OHLCV]  (일시 | 시가 고가 저가 종가 | 거래량/20봉평균)
+${table}`,
+  };
+}
+
+async function callGeminiCombined(p1, apiKey) {
+  const ctx = buildAiContext(p1);
+  const tfL = ctx.tfLabel;
+  const tfCtx = tfL.includes('분') ? '단기 변동성·매수매도 압력·단기 추세 전환 관점'
+    : tfL.includes('시간') ? '중단기 추세 지속·지지저항 돌파 관점'
+    : (tfL==='주봉'||tfL==='월봉') ? '장기 추세·대형 패턴 관점' : '중기 추세·모멘텀·주요 지지저항 관점';
+
+  const prompt = `당신은 전문 기술적 분석가입니다. 아래 "계산된 데이터"만 근거로 해설을 작성하세요. (${tfL} 차트 — ${tfCtx})
+
+${ctx.text}
+
+작성 규칙 (반드시 준수):
+1. 포지션은 위 "확정된 지표 결론"(${ctx.posKo})으로 이미 정해졌습니다. 반대 결론을 내거나 뒤집지 말고, 그 결론의 근거와 리스크를 해설하세요.
+2. 위에 제공된 수치·가격만 인용하세요. 새로운 가격이나 수치를 만들지 마세요.
+3. 제공되지 않은 정보(엘리엇 파동, 뉴스, 펀더멘털, 온체인 등)는 추정하거나 단정하지 마세요.
+4. 각 항목은 수치 나열이 아니라 "그래서 지금 매매에 어떤 의미인지"를 2~3문장으로 해석하세요.
+5. 모든 값은 한국어 평문으로 작성하세요 (마크다운 기호, 영어 혼용 금지).
+
+아래 JSON으로만 출력하세요 (설명, 코드펜스 없이 JSON만):
+{
+  "summary": "현재 상황 핵심 해석 3~5문장. 확정된 결론의 의미와 지금 취할 태도.",
+  "trend": "추세 방향·강도와 매매 타이밍 의미.",
+  "ma_status": "이동평균선 배열이 의미하는 바, 핵심 지지·저항 MA, 이탈 시 시나리오.",
+  "macd_signal": "MACD와 히스토그램이 모멘텀에 대해 말하는 바.",
+  "rsi_signal": "RSI 수준과 다이버전스 사실(제공된 경우)에 기반한 해석.",
+  "bollinger": "볼린저밴드 위치가 변동성·방향성에 대해 말하는 바.",
+  "volume_analysis": "제공된 거래량 사실에 기반해 추세를 컨펌하는지 여부.",
+  "technical": "지표를 종합한 가장 강력한 근거와 가장 큰 리스크, 시나리오별 핵심 조건.",
+  "recommendation": "제공된 매매 플랜(진입·손절·익절)을 어떻게 활용할지, 무효화 조건 포함."
+}`;
+
+  const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey, {temperature: 0.2});
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'').trim();
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (!m) return {summary: cleaned.slice(0, 500)};
+    return JSON.parse(m[0]);
+  } catch(e) {
+    try {
+      const m2 = text.match(/\{[\s\S]*/);
+      if (m2) {
+        let partial = m2[0];
+        if ((partial.match(/"/g)||[]).length % 2 !== 0) partial += '"';
+        return JSON.parse(partial + '}');
+      }
+    } catch {}
+    return {summary: text.replace(/^```(?:json)?\s*/,'').replace(/[{}"]/g,'').slice(0,500).trim() || 'AI 해설을 해석하지 못했습니다.'};
+  }
+}
+
+// ─── Phase 1: 데이터 + 로컬 지표/점수/플랜 (AI 불필요, 즉시) ───────────────
+async function fetchAnalysisPhase1(query, mode='auto', tfId='1d') {
   let {ticker, type} = resolveTicker(query, mode);
+  const tfCfg = TIMEFRAMES.find(t=>t.id===tfId) || TIMEFRAMES.find(t=>t.id==='1d');
 
   if (type === 'crypto') {
-    // 코인: 로컬 맵만 사용 (Yahoo/CoinGecko 프록시 불필요)
     const q = query.trim().toLowerCase();
     const binSym = BINANCE_SYMBOL_MAP[q];
     ticker = binSym ? binSym.replace(/USDT$/i,'') : query.trim().toUpperCase();
   } else if (/[가-힣]/.test(ticker) && !ticker.includes('.')) {
-    // 한국 주식 이름 → 티커 동적 검색
     try { const found = await searchKrTicker(ticker); if (found) ticker = found; } catch {}
   }
 
-  const ohlcv = await fetchOHLCV(query, '6mo', mode);
-  if (!ohlcv || ohlcv.length < 10) throw new Error('데이터 부족');
-  const price = ohlcv[ohlcv.length-1]?.close;
-  const computed = computeTechIndicators(ohlcv);
-  return {ticker, type, ohlcv, price, computed};
+  // 일봉은 1년치(MA200 확보), 그 외는 타임프레임 설정 사용
+  const ohlcv = tfCfg.id === '1d'
+    ? await fetchOHLCV(query, '1y', mode)
+    : await fetchOHLCVForTimeframe(query, tfCfg, mode);
+  if (!ohlcv || ohlcv.length < 30) throw new Error('데이터 부족');
+
+  const {closed, price} = prepareCandles(ohlcv, type);
+  const computed = computeTechIndicators(closed, {tf: tfCfg.id, price});
+  return {ticker, type, ohlcv, candles: closed, price, computed, tfId: tfCfg.id};
 }
 
-// ─── Phase 2: Async AI analysis ──────────────────────────────────────────────
-async function fetchAnalysisPhase2(ticker, price, computed, apiKey) {
-  const report = await callGeminiCombined(null, ticker, price, apiKey, computed, '일봉');
-  report.ticker  = report.ticker  || ticker;
-  report.price   = report.price   || price;
-  report.computed = computed;
-  return report;
+// ─── Phase 2: AI는 해설 텍스트만 생성, 수치·포지션은 로컬 결과 유지 ──────────
+async function fetchAnalysisPhase2(p1, apiKey) {
+  const ai = await callGeminiCombined(p1, apiKey);
+  const rep = buildLocalReport(p1);
+  ['summary','trend','ma_status','macd_signal','rsi_signal','bollinger','volume_analysis','technical','recommendation']
+    .forEach(k => { if (typeof ai[k] === 'string' && ai[k].trim()) rep[k] = ai[k].trim(); });
+  rep._local = false;
+  return rep;
 }
 
-// ─── Full Analysis Pipeline ───────────────────────────────────────────────────
+// ─── Full Analysis Pipeline (비교·모니터 탭에서 사용) ────────────────────────
 async function analyzeFull(query, apiKey, onStep, mode='auto') {
-  const steps = ['ticker','data','chart','vision','report'];
-  let stepIdx = 0;
-  const step = (s) => { stepIdx=steps.indexOf(s); onStep&&onStep(s,stepIdx); };
-
-  step('ticker');
-  // For crypto mode, resolve coin ID dynamically via CoinGecko search
-  let ticker, type;
-  if (mode === 'crypto') {
-    const coinId = await searchCoinId(query);
-    ticker = coinId;
-    type = 'crypto';
-  } else {
-    ({ticker, type} = resolveTicker(query, mode));
-  }
-
-  // Korean name → try to resolve ticker dynamically
-  if (type === 'stock' && /[가-힣]/.test(ticker) && !ticker.includes('.')) {
-    try {
-      const found = await searchKrTicker(ticker);
-      if (found) ticker = found;
-    } catch {}
-  }
-
-  step('data');
-  let ohlcv, price;
+  onStep && onStep('data', 1);
+  let p1;
   try {
-    ohlcv = await fetchOHLCV(query, '6mo', mode);
-    if(!ohlcv || ohlcv.length < 10) throw new Error('데이터 부족');
-    price = ohlcv[ohlcv.length-1]?.close;
+    p1 = await fetchAnalysisPhase1(query, mode, '1d');
   } catch(e) {
-    // 데이터 수집 실패 → 텍스트 분석으로 폴백
-    onStep&&onStep('fallback', -1);
+    onStep && onStep('fallback', -1);
     const r = await analyzeDirectly(query, apiKey);
     r._dataError = `가격 데이터 수집 실패 (${e.message}). 텍스트 기반 분석으로 대체합니다.`;
     return r;
   }
-
-  step('chart');
-  let chartB64 = null;
+  onStep && onStep('report', 4);
   try {
-    chartB64 = await generateChartImage(ohlcv, ticker);
-  } catch(e) { console.error('차트 생성 실패:', e); }
-
-  // Compute technical indicators from OHLCV
-  const computed = computeTechIndicators(ohlcv);
-
-  step('vision');
-  const report = await callGeminiCombined(chartB64, ticker, price, apiKey, computed, '일봉');
-  report.ticker   = report.ticker || ticker;
-  report.price    = report.price  || price;
-  report.chartB64 = chartB64;
-  report.computed = computed;
-
-  report._query = query;
-  return report;
+    const r = await fetchAnalysisPhase2(p1, apiKey);
+    r._query = query;
+    return r;
+  } catch(e) {
+    // AI 실패해도 로컬 지표 결과는 반환
+    const r = buildLocalReport(p1);
+    r.summary = 'AI 해설 생성에 실패했습니다. 아래 지표 점수와 매매 플랜은 로컬 계산 결과입니다.';
+    r._aiError = true; r._query = query;
+    return r;
+  }
 }
 
 // ─── Backtest ─────────────────────────────────────────────────────────────────
@@ -2134,23 +2421,24 @@ function ComputedTechSection({computed}) {
   );
 }
 
-function FibSection({computed}) {
+function FibSection({computed, ticker}) {
+  const cs = currencySym(ticker);
   if (!computed) return null;
   const {fibs, fibExts, fib90, price, rounds} = computed;
   return (
     <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
       <div style={{fontSize:'.8rem',fontWeight:700,color:'#a78bfa',marginBottom:10}}>
-        📐 피보나치 레벨 (90일 기준: 저 ${fp(fib90?.low)} / 고 ${fp(fib90?.high)})
+        📐 피보나치 레벨 (최근 {computed.swingBars||90}봉 {computed.fibDir==='down'?'하락':'상승'} 스윙: 저 {cs}{fp(fib90?.low)} / 고 {cs}{fp(fib90?.high)})
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
         {/* Retracements */}
         <div>
-          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>되돌림 (지지)</div>
+          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '되돌림 (반등 시 저항)' : '되돌림 (지지)'}</div>
           {fibs.map(f => (
             <div key={f.level} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1e293b20',fontSize:'.8rem'}}>
               <span style={{color:'#94a3b8'}}>Fib {f.level}</span>
-              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>${fp(f.price)}</span>
+              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>{cs}{fp(f.price)}</span>
               <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
             </div>
           ))}
@@ -2158,11 +2446,11 @@ function FibSection({computed}) {
 
         {/* Extensions */}
         <div>
-          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>확장 (목표)</div>
+          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '확장 (하락 목표)' : '확장 (목표)'}</div>
           {fibExts.map(f => (
             <div key={f.level} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1e293b20',fontSize:'.8rem'}}>
               <span style={{color:'#94a3b8'}}>Ext {f.level}</span>
-              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>${fp(f.price)}</span>
+              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>{cs}{fp(f.price)}</span>
               <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
             </div>
           ))}
@@ -2180,7 +2468,7 @@ function FibSection({computed}) {
                 color: r.role === '저항' ? '#f87171' : '#34d399',
                 borderRadius:4, padding:'2px 8px', fontSize:'.78rem',
               }}>
-                ${fp(r.level)} {fmtPct(r.pct)} ({r.role})
+                {cs}{fp(r.level)} {fmtPct(r.pct)} ({r.role})
               </span>
             ))}
           </div>
@@ -2191,117 +2479,122 @@ function FibSection({computed}) {
 }
 
 function TradePlanSection({computed, report}) {
-  if (!computed?.tradePlan) return null;
-  const {tradePlan} = computed;
-  const entryRef = tradePlan.entry1 || report?.price;
-  const pct = (val, ref) => (ref && val) ? ((val-ref)/ref*100) : null;
+  const plan = computed?.tradePlan;
+  if (!plan) return null;
+  const ticker = report?.ticker;
+  const price = computed.price;
+  const isLong = plan.direction === 'long';
+  const side = isLong ? 1 : -1;
+  const neutral = Math.abs(computed.score||0) < 25;
+  const distPct = v => (v/price - 1) * 100;
+  const retPct  = v => side * (v/plan.entry1 - 1) * 100;
 
   const rows = [
-    {icon:'⊙', label:'진입가',   val: entryRef,          color:'#34d399', rr: null,          p: 0,                             isEntry:true},
-    {icon:'✓', label:'익절 1차', val: tradePlan.profit1, color:'#4ade80', rr: tradePlan.rr1, p: pct(tradePlan.profit1,entryRef)},
-    {icon:'✓', label:'익절 2차', val: tradePlan.profit2, color:'#4ade80', rr: tradePlan.rr2, p: pct(tradePlan.profit2,entryRef)},
-    {icon:'✓', label:'익절 3차', val: tradePlan.profit3, color:'#4ade80', rr: tradePlan.rr3, p: pct(tradePlan.profit3,entryRef)},
-    {icon:'⊘', label:'손절',     val: tradePlan.stopLoss,color:'#f87171', rr: null,          p: pct(tradePlan.stopLoss,entryRef)},
-  ].filter(r=>r.val!=null);
+    {label: plan.entryMode==='market' ? '진입 (현재가 부근)' : '진입 1차 (지정가)', val:plan.entry1, color:'#34d399', kind:'entry'},
+    {label: '진입 2차 (분할)', val:plan.entry2, color:'#34d399', kind:'entry'},
+    {label: '익절 1차', val:plan.profit1, rr:plan.rr1, color:'#4ade80', kind:'tp'},
+    {label: '익절 2차', val:plan.profit2, rr:plan.rr2, color:'#4ade80', kind:'tp'},
+    {label: '익절 3차', val:plan.profit3, rr:plan.rr3, color:'#4ade80', kind:'tp'},
+    {label: '손절',     val:plan.stopLoss,              color:'#f87171', kind:'sl'},
+  ].filter(r => r.val != null);
 
-  const thStyle = {padding:'9px 12px',textAlign:'left',fontSize:'.68rem',fontWeight:700,color:'#475569',letterSpacing:'0.1em',whiteSpace:'nowrap'};
-  const thR = {...thStyle,textAlign:'right'};
+  const th = {padding:'9px 12px',textAlign:'right',fontSize:'.68rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',whiteSpace:'nowrap'};
+  const dirColor = isLong ? '#4ade80' : '#f87171';
 
   return (
     <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8,padding:'10px 12px',borderBottom:'1px solid #1e293b',background:'#0f172a'}}>
+        <span style={{fontWeight:800,fontSize:'.85rem',color:dirColor}}>{isLong ? '▲ 롱 플랜' : '▼ 숏 플랜'}</span>
+        {neutral && <span style={{fontSize:'.74rem',color:'#fbbf24'}}>⚠ 지표 점수가 중립 구간(±25 이내)이라 조건부 시나리오입니다</span>}
+      </div>
+      <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',minWidth:420}}>
         <thead>
-          <tr style={{background:'#0f172a',borderBottom:'1px solid #1e293b'}}>
-            <th style={thStyle}>레벨</th>
-            <th style={thR}>가격</th>
-            <th style={thR}>리스크/리워드</th>
-            <th style={thR}>수익률</th>
+          <tr style={{borderBottom:'1px solid #1e293b'}}>
+            <th style={{...th,textAlign:'left'}}>레벨</th>
+            <th style={th}>가격</th>
+            <th style={th}>현재가 대비</th>
+            <th style={th}>R:R</th>
+            <th style={th}>예상 손익</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row,i)=>{
-            const pctVal = row.isEntry ? null : row.p;
+          {rows.map((r,i)=>{
+            const d = distPct(r.val);
+            const ret = r.kind==='entry' ? null : retPct(r.val);
             return (
-              <tr key={i} style={{borderBottom:'1px solid #0f172a',background: i%2===0 ? '#0a0f1a':'#0d1424'}}>
-                <td style={{padding:'10px 12px'}}>
-                  <span style={{color:row.color,fontWeight:700,fontSize:'.88rem',marginRight:6}}>{row.icon}</span>
-                  <span style={{color: row.isEntry ? '#94a3b8' : row.color, fontWeight: row.isEntry?600:700, fontSize:'.85rem'}}>{row.label}</span>
-                </td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',fontWeight:700,color:'#e2e8f0',fontSize:'.9rem'}}>
-                  ${fp(row.val)}
-                </td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontSize:'.82rem',color:'#64748b'}}>
-                  {row.rr!=null ? <span style={{color:'#94a3b8'}}>{row.rr.toFixed(2)} RR</span> : '—'}
-                </td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontSize:'.88rem',
-                  color: pctVal==null?'#64748b':pctVal>=0?'#4ade80':'#f87171'}}>
-                  {pctVal!=null?(pctVal>=0?`+${pctVal.toFixed(2)}%`:`${pctVal.toFixed(2)}%`):'—'}
+              <tr key={i} style={{borderBottom:'1px solid #0f172a',background:i%2===0?'#0a0f1a':'#0d1424'}}>
+                <td style={{padding:'10px 12px',color:r.color,fontWeight:700,fontSize:'.85rem',whiteSpace:'nowrap'}}>{r.label}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',fontWeight:700,color:'#e2e8f0',fontSize:'.9rem'}}>{fmtPx(r.val,ticker)}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontSize:'.8rem',color:'#64748b'}}>{`${d>=0?'+':''}${d.toFixed(2)}%`}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontSize:'.82rem',color:'#94a3b8'}}>{r.rr!=null ? r.rr.toFixed(2) : '—'}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontSize:'.88rem',color:ret==null?'#64748b':ret>=0?'#4ade80':'#f87171'}}>
+                  {ret==null ? '—' : `${ret>=0?'+':''}${ret.toFixed(2)}%`}
                 </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      </div>
       <div style={{padding:'8px 12px',background:'#080d18',borderTop:'1px solid #1e293b',display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:6,fontSize:'.74rem',color:'#475569'}}>
-        <span>⚠️ 거래 리스크: 계좌의 1%  ·  진입조건: 거래량↑ &amp; 일봉 양봉 마감</span>
+        <span>리스크(진입~손절) {plan.riskPct.toFixed(2)}% · ATR(14) {fmtPx(plan.atr,ticker)} · 손절은 ATR·스윙 중 가까운 쪽</span>
         <span>설정 유형: <span style={{color:'#60a5fa',fontWeight:700}}>{report?.setup_type||'스윙 트레이드'}</span></span>
       </div>
     </div>
   );
 }
 
-function ReportHero({report, onSave}) {
+function ReportHero({report, aiPending}) {
   if(!report) return null;
   const pos = report.position || 'hold';
   const posColor = pos==='long'?'#22c55e':pos==='short'?'#ef4444':'#f59e0b';
-  const posBg   = pos==='long'?'#052e16':pos==='short'?'#450a0a':'#451a03';
+  const posBg    = pos==='long'?'#052e16':pos==='short'?'#450a0a':'#451a03';
   const posBorder= pos==='long'?'#166534':pos==='short'?'#7f1d1d':'#92400e';
   const posIcon  = pos==='long'?'↗':pos==='short'?'↙':'→';
   const posLabel = pos==='long'?'LONG':pos==='short'?'SHORT':'HOLD';
-  const posSub   = pos==='long'?'상승 포지션':pos==='short'?'하락 포지션':'관망';
+  const posSub   = pos==='long'?'상승 우위':pos==='short'?'하락 우위':'관망';
   const curPrice = report.price ? Number(report.price) : null;
   const conf = Math.min(100, Math.max(0, report.confidence || 50));
   const ticker = (report.ticker||'').toUpperCase();
   const letter = ticker[0] || '?';
-  // SVG confidence donut
   const R = 28, circ = 2*Math.PI*R, dash = circ*(1-conf/100);
-  const signalPalette = [
-    {bg:'#052e16',border:'#166534',color:'#4ade80'},
-    {bg:'#052e16',border:'#166534',color:'#4ade80'},
-    {bg:'#052e16',border:'#166534',color:'#4ade80'},
-    {bg:'#450a0a',border:'#7f1d1d',color:'#f87171'},
-    {bg:'#1e1b4b',border:'#3730a3',color:'#a78bfa'},
-  ];
+  const palette = {
+    pos:{bg:'#052e16',border:'#166534',color:'#4ade80'},
+    neg:{bg:'#450a0a',border:'#7f1d1d',color:'#f87171'},
+    neu:{bg:'#1e1b4b',border:'#3730a3',color:'#a78bfa'},
+  };
   return (
     <div className="card" style={{padding:'20px 22px',background:'linear-gradient(135deg,#0f172a 70%,#131f35)'}}>
-      {/* ── top row ── */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:16,marginBottom:16}}>
-        {/* Left: avatar + name + price */}
         <div style={{display:'flex',alignItems:'center',gap:14}}>
           <div style={{width:52,height:52,borderRadius:'50%',background:'linear-gradient(135deg,#3b82f6,#8b5cf6)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.35rem',fontWeight:900,color:'#fff',flexShrink:0,boxShadow:'0 0 0 3px #1e293b'}}>
             {letter}
           </div>
           <div>
             <div style={{fontSize:'1.75rem',fontWeight:900,color:'#f8fafc',lineHeight:1,letterSpacing:'-0.02em'}}>{ticker}</div>
-            <div style={{fontSize:'.82rem',color:'#64748b',marginTop:2}}>{report._noData?'AI 텍스트 분석':'기술적 분석 리포트'}</div>
-            <div style={{marginTop:5,display:'flex',alignItems:'baseline',gap:6}}>
+            <div style={{fontSize:'.82rem',color:'#64748b',marginTop:2}}>
+              {report._noData?'AI 텍스트 분석':'기술적 분석 리포트'}{report.tfLabel ? ` · ${report.tfLabel} 기준` : ''}
+            </div>
+            <div style={{marginTop:5}}>
               <span style={{fontSize:'1.45rem',fontWeight:700,color:'#e2e8f0',fontFamily:'monospace',letterSpacing:'-0.01em'}}>
-                {curPrice?`$${curPrice.toLocaleString(undefined,{maximumFractionDigits:4})}`:'—'}
+                {curPrice ? fmtPx(curPrice, report.ticker) : '—'}
               </span>
             </div>
           </div>
         </div>
-        {/* Right: position badge + confidence donut */}
         <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
-          <div style={{background:posBg,border:`1.5px solid ${posBorder}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}>
+          <div style={{background:posBg,border:`1.5px solid ${posBorder}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}
+               title="포지션은 AI가 아니라 지표 점수(±25 기준)로 결정됩니다">
             <div style={{fontSize:'1.15rem',fontWeight:900,color:posColor,letterSpacing:'0.04em'}}>{posIcon} {posLabel}</div>
-            <div style={{fontSize:'.7rem',color:posColor+'99',marginTop:2}}>{posSub}</div>
+            <div style={{fontSize:'.7rem',color:posColor+'99',marginTop:2}}>
+              {posSub}{report.score!=null ? ` · 점수 ${report.score>0?'+':''}${report.score}` : ''}
+            </div>
           </div>
-          <div style={{position:'relative',width:74,height:74,flexShrink:0}}>
+          <div style={{position:'relative',width:74,height:74,flexShrink:0}} title="신뢰도 = 50 + |지표 점수| × 0.5 (관망은 50)">
             <svg width="74" height="74" style={{transform:'rotate(-90deg)',display:'block'}}>
               <circle cx="37" cy="37" r={R} fill="none" stroke="#1e293b" strokeWidth="6"/>
-              <circle cx="37" cy="37" r={R} fill="none" stroke={posColor} strokeWidth="6"
-                strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>
+              <circle cx="37" cy="37" r={R} fill="none" stroke={posColor} strokeWidth="6" strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>
             </svg>
             <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
               <span style={{fontSize:'1.05rem',fontWeight:800,color:'#f8fafc',lineHeight:1}}>{conf}%</span>
@@ -2310,21 +2603,26 @@ function ReportHero({report, onSave}) {
           </div>
           {report.risk_level && (
             <span className={`badge ${report.risk_level==='low'?'badge-green':report.risk_level==='high'?'badge-red':'badge-yellow'}`} style={{fontSize:'.8rem'}}>
-              리스크 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
+              변동성 {report.risk_level==='low'?'낮음':report.risk_level==='high'?'높음':'중간'}
             </span>
           )}
         </div>
       </div>
-      {/* ── key signals ── */}
       {report.signals?.length>0 && (
         <div>
-          <div style={{fontSize:'.7rem',fontWeight:700,color:'#334155',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS</div>
+          <div style={{fontSize:'.7rem',fontWeight:700,color:'#334155',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS (지표 기반)</div>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
             {report.signals.map((s,i)=>{
-              const c=signalPalette[i%signalPalette.length];
+              const c = palette[report.signalsTone?.[i]] || palette.neu;
               return <span key={i} style={{background:c.bg,border:`1px solid ${c.border}`,color:c.color,borderRadius:20,padding:'4px 12px',fontSize:'.78rem',fontWeight:600}}>{s}</span>;
             })}
           </div>
+        </div>
+      )}
+      {aiPending && (
+        <div style={{display:'flex',alignItems:'center',gap:8,marginTop:12,fontSize:'.8rem',color:'#64748b'}}>
+          <div className="spinner" style={{width:14,height:14,borderWidth:2}}/>
+          AI 해설 생성 중... (포지션·점수·매매 플랜은 지표 계산으로 이미 확정)
         </div>
       )}
       {(report._dataError||report._noData) && (
@@ -2337,43 +2635,40 @@ function ReportHero({report, onSave}) {
 }
 
 function AnalysisSection({report}) {
-  if(!report) return null;
   const [open, setOpen] = React.useState(true);
   const [techExpanded, setTechExpanded] = React.useState(false);
+  if(!report) return null;
+  const computed = report.computed;
+  const ticker = report.ticker;
   const curPrice = report.price ? Number(report.price) : null;
-  const fmtPrice = v => v!=null ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:4})}` : null;
 
-  // Price level card with % distance
   const PriceTag = ({val, label, color, icon}) => {
-    if(!val) return null;
+    if(val==null) return null;
     const n=Number(val), pct=curPrice?((n-curPrice)/curPrice*100):null;
     const dc=pct==null?'#64748b':pct>=0?'#4ade80':'#f87171';
     return (
       <div style={{flex:'1 1 90px',minWidth:86,background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 10px',textAlign:'center'}}>
         <div style={{fontSize:'.7rem',color:'#475569',fontWeight:600,marginBottom:4}}>{icon} {label}</div>
-        <div style={{fontSize:'1rem',fontWeight:800,color,fontFamily:'monospace'}}>{fmtPrice(val)}</div>
+        <div style={{fontSize:'1rem',fontWeight:800,color,fontFamily:'monospace'}}>{fmtPx(val,ticker)}</div>
         {pct!=null && <div style={{fontSize:'.72rem',fontWeight:700,color:dc,marginTop:3}}>{pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`}</div>}
       </div>
     );
   };
-
-  // Technical metric row for right panel
-  const computed = report.computed;
-  const ma = computed?.ma||{};
-  const bb = computed?.bb;
-  const rsi14 = computed?.rsi14;
-  const rsiColor = rsi14==null?'#94a3b8':rsi14>=70?'#f87171':rsi14<=30?'#4ade80':'#fbbf24';
-
   const MetricRow = ({label, value, valueColor}) => (
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #0f172a',fontSize:'.82rem'}}>
       <span style={{color:'#64748b'}}>{label}</span>
-      <span style={{color:valueColor||'#e2e8f0',fontWeight:700}}>{value}</span>
+      <span style={{color:valueColor||'#e2e8f0',fontWeight:700,textAlign:'right'}}>{value}</span>
     </div>
   );
 
-  // Trend label from report
-  const trendLabel = (report.trend||'').slice(0,20)||'—';
-  const trendColor = report.position==='long'?'#4ade80':report.position==='short'?'#f87171':'#fbbf24';
+  const rsi14 = computed?.rsi14;
+  const rsiColor = rsi14==null?'#94a3b8':rsi14>=70?'#f87171':rsi14<=30?'#4ade80':'#fbbf24';
+  const bb = computed?.bb;
+  const macd = computed?.macd;
+  const vt = computed?.volTrend;
+  const tech = report.technical || '';
+  const facts = computed?.facts || [];
+  const pos = report.position;
 
   return (
     <div className="card">
@@ -2382,143 +2677,166 @@ function AnalysisSection({report}) {
       </div>
       {open && <>
 
-      {/* ── Trade Plan (prominent) ── */}
+      {/* 지표 점수 분해 */}
+      {report.scoreBreakdown && (
+        <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 14px',marginBottom:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:6}}>
+            <span style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>🧮 지표 점수 분해</span>
+            <span style={{fontSize:'.78rem',color:'#64748b'}}>
+              합계 <b style={{color:report.score>=25?'#4ade80':report.score<=-25?'#f87171':'#fbbf24',fontSize:'.95rem'}}>{report.score>0?'+':''}{report.score}</b> / ±100 · 롱 ≥ +25 · 숏 ≤ −25
+            </span>
+          </div>
+          {report.scoreBreakdown.map(c=>(
+            <div key={c.key} style={{display:'grid',gridTemplateColumns:'minmax(90px,1.1fr) minmax(80px,1.4fr) minmax(0,2.2fr)',gap:10,alignItems:'center',padding:'4px 0',fontSize:'.78rem'}}>
+              <span style={{color:'#94a3b8'}}>{c.label} <span style={{color:'#334155'}}>({c.weight})</span></span>
+              <div style={{position:'relative',height:8,background:'#111827',borderRadius:4}}>
+                <div style={{position:'absolute',left:'50%',top:-2,bottom:-2,width:1,background:'#334155'}}/>
+                <div style={{position:'absolute',top:0,bottom:0,borderRadius:4,
+                  left: c.value>=0 ? '50%' : `${50 + c.value*50}%`,
+                  width: `${Math.abs(c.value)*50}%`,
+                  background: c.value>=0 ? '#22c55e' : '#ef4444'}}/>
+              </div>
+              <span style={{color:'#64748b'}}>
+                <b style={{color:c.contrib>0?'#4ade80':c.contrib<0?'#f87171':'#94a3b8'}}>{c.contrib>0?'+':''}{c.contrib.toFixed(1)}</b> · {c.note}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 매매 플랜 */}
       <div style={{marginBottom:16}}>
-        <div style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜</div>
-        <TradePlanSection computed={report.computed} report={report}/>
+        <div style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반)</div>
+        <TradePlanSection computed={computed} report={report}/>
       </div>
 
-      {/* ── Key Price Levels ── */}
+      {/* 핵심 가격대 */}
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
-        <PriceTag val={report.support}      label="지지선"  color="#4ade80" icon="🟢"/>
-        <PriceTag val={report.resistance}   label="저항선"  color="#f87171" icon="🔴"/>
-        <PriceTag val={report.target_price} label="목표가"  color="#a78bfa" icon="🎯"/>
-        <PriceTag val={report.stop_loss}    label="손절가"  color="#fb923c" icon="⛔"/>
+        <PriceTag val={report.support}      label="가까운 지지"  color="#4ade80" icon="🟢"/>
+        <PriceTag val={report.resistance}   label="가까운 저항"  color="#f87171" icon="🔴"/>
+        <PriceTag val={report.target_price} label="1차 목표"     color="#a78bfa" icon="🎯"/>
+        <PriceTag val={report.stop_loss}    label="손절"         color="#fb923c" icon="⛔"/>
       </div>
 
-      {/* ── Technical Analysis split layout ── */}
-      {(report.technical || computed) && (
+      {/* 기술 지표 좌우 분할 */}
+      {computed && (
         <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
           <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>기술 지표</div>
-          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1.2fr) minmax(0,1fr)',gap:0}}>
-            {/* Left: Summary */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:0}}>
             <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
               <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
                 <div style={{fontSize:'1.4rem',lineHeight:1}}>📈</div>
-                <div>
+                <div style={{minWidth:0}}>
                   <div style={{fontSize:'.72rem',fontWeight:700,color:'#60a5fa',letterSpacing:'0.08em',marginBottom:6}}>요약</div>
-                  <div style={{fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7}}>
-                    {techExpanded ? report.technical : (report.technical||'').slice(0,120)+(report.technical?.length>120?'…':'')}
-                  </div>
-                  {(report.technical||'').length>120 && (
-                    <button onClick={()=>setTechExpanded(v=>!v)} style={{marginTop:8,background:'none',border:'none',color:'#3b82f6',cursor:'pointer',fontSize:'.78rem',padding:0,fontWeight:600}}>
-                      {techExpanded?'접기 ▲':'전체 보기 ▼'}
-                    </button>
+                  {tech ? (
+                    <>
+                      <div style={{fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7}}>
+                        {techExpanded ? tech : tech.slice(0,140)+(tech.length>140?'…':'')}
+                      </div>
+                      {tech.length>140 && (
+                        <button onClick={()=>setTechExpanded(v=>!v)} style={{marginTop:8,background:'none',border:'none',color:'#3b82f6',cursor:'pointer',fontSize:'.78rem',padding:0,fontWeight:600}}>
+                          {techExpanded?'접기 ▲':'전체 보기 ▼'}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{fontSize:'.8rem',color:'#475569'}}>AI 해설 대기 중 — 아래는 지표에서 직접 계산한 사실입니다.</div>
+                  )}
+                  {facts.length>0 && (
+                    <ul style={{margin:'10px 0 0',paddingLeft:16,fontSize:'.78rem',color:'#64748b',lineHeight:1.7}}>
+                      {facts.map((f,i)=><li key={i}>{f}</li>)}
+                    </ul>
                   )}
                 </div>
               </div>
             </div>
-            {/* Right: Metrics */}
             <div style={{padding:'14px'}}>
-              {rsi14!=null && <MetricRow label="RSI(14)" value={rsi14.toFixed(1)} valueColor={rsiColor}/>}
-              {ma.ma50  && curPrice && <MetricRow label="MA50 대비" value={(((curPrice/ma.ma50)-1)*100).toFixed(2)+'%'} valueColor={curPrice>=ma.ma50?'#4ade80':'#f87171'}/>}
-              {ma.ma200 && curPrice && <MetricRow label="MA200 대비" value={(((curPrice/ma.ma200)-1)*100).toFixed(2)+'%'} valueColor={curPrice>=ma.ma200?'#4ade80':'#f87171'}/>}
-              {bb && <MetricRow label="볼린저밴드" value={curPrice>=bb.upper?'상단 돌파':curPrice<=bb.lower?'하단 이탈':'밴드 내부'} valueColor={curPrice>=bb.upper?'#f87171':curPrice<=bb.lower?'#4ade80':'#94a3b8'}/>}
-              <MetricRow label="추세" value={report.position==='long'?'강세 (상승)':report.position==='short'?'약세 (하락)':'중립'} valueColor={trendColor}/>
-              <MetricRow label="포지션 신뢰도" value={`${report.confidence||50}%`} valueColor="#a78bfa"/>
+              {rsi14!=null && <MetricRow label={`RSI(${computed.rsiPeriod})`} value={rsi14.toFixed(1)} valueColor={rsiColor}/>}
+              {computed.maSet.filter(m=>m.v!=null && curPrice).map(m=>{
+                const p=(curPrice/m.v-1)*100;
+                return <MetricRow key={m.n} label={`MA${m.n} 대비`} value={`${p>=0?'+':''}${p.toFixed(2)}%`} valueColor={p>=0?'#4ade80':'#f87171'}/>;
+              })}
+              {macd && macd.hist!=null && <MetricRow label="MACD 히스토그램" value={macd.hist>=0?'양(+) 강세':'음(−) 약세'} valueColor={macd.hist>=0?'#4ade80':'#f87171'}/>}
+              {bb && curPrice && <MetricRow label="볼린저밴드" value={curPrice>=bb.upper?'상단 돌파':curPrice<=bb.lower?'하단 이탈':'밴드 내부'} valueColor={curPrice>=bb.upper?'#f87171':curPrice<=bb.lower?'#4ade80':'#94a3b8'}/>}
+              {computed.atrPct!=null && <MetricRow label="ATR 변동성" value={`${computed.atrPct.toFixed(2)}%`} valueColor="#94a3b8"/>}
+              {vt && <MetricRow label="거래량 추세" value={`5봉/20봉 ${vt.r5_20.toFixed(2)}배`} valueColor={vt.r5_20>=1.2?'#4ade80':vt.r5_20<=0.8?'#f87171':'#94a3b8'}/>}
+              <MetricRow label="종합 판정" value={pos==='long'?'롱 우위':pos==='short'?'숏 우위':'관망'} valueColor={pos==='long'?'#4ade80':pos==='short'?'#f87171':'#fbbf24'}/>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Fibonacci (collapsible) ── */}
-      <FibSection computed={report.computed}/>
+      <FibSection computed={computed} ticker={ticker}/>
       </>}
     </div>
   );
 }
 
 function ConclusionSection({report}) {
-  if(!report) return null;
   const [open, setOpen] = React.useState(true);
+  if(!report) return null;
   const pos = report.position || 'hold';
   const outlookColor = pos==='long'?'#4ade80':pos==='short'?'#f87171':'#fbbf24';
   const outlookLabel = pos==='long'?'강세 (Bullish)':pos==='short'?'약세 (Bearish)':'중립 (Neutral)';
-
-  // Star conviction
   const conf = Math.min(100, Math.max(0, report.confidence||50));
-  const stars = Math.round(conf/20); // 0-5
-  const StarRow = ({filled}) => (
-    <span style={{fontSize:'1rem',color:filled?'#fbbf24':'#334155'}}>★</span>
-  );
-
+  const stars = Math.round(conf/20);
   const OpinionRow = ({label, value, valueColor}) => (
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
       <span style={{color:'#64748b'}}>{label}</span>
-      <span style={{color:valueColor||'#e2e8f0',fontWeight:700}}>{value}</span>
+      <span style={{color:valueColor||'#e2e8f0',fontWeight:700,textAlign:'right'}}>{value}</span>
     </div>
   );
-
   return (
     <div className="card">
       <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>💡 AI 투자 의견</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+        <span>💡 AI 해설 · 투자 의견</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
       </div>
       {open && <>
-
-      {/* ── Summary banner ── */}
       {report.summary && (
         <div style={{background:'#0a0f1a',borderLeft:'3px solid #3b82f6',borderRadius:'0 8px 8px 0',padding:'14px 16px',marginBottom:16,lineHeight:1.8,fontSize:'.9rem',color:'#cbd5e1'}}>
           {report.summary}
         </div>
       )}
-
-      {/* ── Investment Opinion split layout ── */}
       <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
         <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>투자 의견</div>
-        <div style={{display:'grid',gridTemplateColumns:'minmax(0,1.2fr) minmax(0,1fr)',gap:0}}>
-          {/* Left: OUR TAKE */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:0}}>
           <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
             <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
               <div style={{fontSize:'1.4rem',lineHeight:1}}>🎯</div>
               <div>
                 <div style={{fontSize:'.72rem',fontWeight:700,color:'#a78bfa',letterSpacing:'0.08em',marginBottom:6}}>종합 의견</div>
                 <div style={{fontSize:'.83rem',color:'#94a3b8',lineHeight:1.7}}>
-                  {(report.recommendation||report.summary||'분석 데이터 없음').slice(0,200)}
+                  {report.recommendation || report.summary || '분석 데이터 없음'}
                 </div>
               </div>
             </div>
           </div>
-          {/* Right: Opinion metrics */}
           <div style={{padding:'14px'}}>
             <OpinionRow label="시장 전망" value={outlookLabel} valueColor={outlookColor}/>
-            <OpinionRow label="투자 기간" value={report.time_horizon||'중기 (1~3개월)'} valueColor="#60a5fa"/>
+            <OpinionRow label="투자 기간" value={report.time_horizon||'중기 (수주~3개월)'} valueColor="#60a5fa"/>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
               <span style={{color:'#64748b'}}>확신 강도</span>
-              <span>{[1,2,3,4,5].map(i=><StarRow key={i} filled={i<=stars}/>)}</span>
+              <span>{[1,2,3,4,5].map(i=><span key={i} style={{fontSize:'1rem',color:i<=stars?'#fbbf24':'#334155'}}>★</span>)}</span>
             </div>
-            <OpinionRow label="적합 투자자" value={report.setup_type||'스윙 트레이더'} valueColor="#94a3b8"/>
+            <OpinionRow label="적합 유형" value={report.setup_type||'스윙 트레이더'} valueColor="#94a3b8"/>
           </div>
         </div>
       </div>
-
-      {/* ── Detail rows (collapsible) ── */}
       <details style={{marginTop:4}}>
-        <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem',marginBottom:8,userSelect:'none'}}>▶ 상세 분석 항목 펼치기</summary>
+        <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem',marginBottom:8,userSelect:'none'}}>상세 해설 항목 펼치기</summary>
         <div style={{marginTop:8}}>
-          <InfoRow label="📈 추세"         value={report.trend}/>
-          <InfoRow label="📊 이동평균선"    value={report.ma_status}/>
-          <InfoRow label="📉 볼린저밴드"    value={report.bollinger}/>
-          <InfoRow label="📦 거래량"        value={report.volume_analysis}/>
-          <InfoRow label="⚡ RSI"           value={report.rsi_signal}/>
-          <InfoRow label="🌊 엘리엇파동"    value={report.elliott_wave}/>
+          <InfoRow label="📈 추세"       value={report.trend}/>
+          <InfoRow label="📊 이동평균선"  value={report.ma_status}/>
+          <InfoRow label="📉 MACD"       value={report.macd_signal}/>
+          <InfoRow label="⚡ RSI"         value={report.rsi_signal}/>
+          <InfoRow label="📉 볼린저밴드"  value={report.bollinger}/>
+          <InfoRow label="📦 거래량"      value={report.volume_analysis}/>
+          <InfoRow label="🔬 종합 분석"   value={report.technical}/>
         </div>
       </details>
-
-      {/* Vision raw */}
       {report.visionText && (
         <details style={{marginTop:8}}>
-          <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem'}}>▶ AI 차트 분석 원문 보기</summary>
+          <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem'}}>AI 차트 분석 원문 보기</summary>
           <div style={{background:'#0f172a',border:'1px solid #1e293b',borderRadius:8,padding:14,marginTop:8,fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7,whiteSpace:'pre-wrap'}}>{report.visionText}</div>
         </details>
       )}
@@ -2526,7 +2844,6 @@ function ConclusionSection({report}) {
     </div>
   );
 }
-
 
 
 function SearchAutocomplete({value, onChange, onSearch, placeholder}) {
@@ -2675,10 +2992,10 @@ function TradingViewWidget({ticker, query=''}) {
 }
 
 // ─── Interactive Chart Component ─────────────────────────────────────────────
-function InteractiveChart({query, mode, resolvedTicker}) {
+function InteractiveChart({query, mode, resolvedTicker, initialTf, analysisTf, onAnalyzeTf}) {
   // 한국 주식 감지: .KS / .KQ 티커 또는 KR_TICKER_MAP 값인 경우 인트라데이 미지원
   const isKrStock = /\.(ks|kq)$/i.test(resolvedTicker||query||'');
-  const [tf, setTf]       = useState('1d');
+  const [tf, setTf]       = useState(initialTf||'1d');
   const [ohlcv, setOhlcv] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -2731,6 +3048,14 @@ function InteractiveChart({query, mode, resolvedTicker}) {
           {isKrStock && <span style={{fontSize:'.72rem',color:'#475569',marginLeft:4}}>일/주/월봉만 지원</span>}
         </div>
       </div>
+      {onAnalyzeTf && analysisTf && tf!==analysisTf && !loading && !error && (
+        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',margin:'0 0 8px',padding:'8px 12px',background:'#0f172a',border:'1px solid #1e293b',borderRadius:8,fontSize:'.8rem',color:'#94a3b8'}}>
+          <span>지금 분석(지표·점수·AI)은 <b style={{color:'#e2e8f0'}}>{(TIMEFRAMES.find(t=>t.id===analysisTf)||{}).label}</b> 기준입니다.</span>
+          <button className="btn-secondary" style={{padding:'3px 12px',fontSize:'.78rem'}} onClick={()=>onAnalyzeTf(tf)}>
+            📌 {(TIMEFRAMES.find(t=>t.id===tf)||{}).label} 기준으로 다시 분석
+          </button>
+        </div>
+      )}
       {loading && (
         <div style={{textAlign:'center',padding:'24px 0'}}>
           <div className="spinner" style={{margin:'0 auto'}}/>
@@ -2791,6 +3116,8 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [error, setError]   = useState('');
   const [phase1, setPhase1] = useState(null);   // immediate local data
   const [aiLoading, setAiLoading] = useState(false);
+  const [analysisTf, setAnalysisTf] = useState('1d');
+  const [lastTarget, setLastTarget] = useState('');
   const [imgB64, setImgB64] = useState(null);
   const [imgType, setImgType] = useState(null);
   const [logs, setLogs]     = useState(()=>ls_get('cs_logs',[]));
@@ -2810,11 +3137,13 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
     return true;
   };
 
-  async function handleAnalyze(queryVal, modeVal) {
+  async function handleAnalyze(queryVal, modeVal, tfArg) {
     const target = (queryVal||query).trim();
     if (!target) return;
     if (!checkReady()) return;
     const effectiveMode = modeVal||mode;
+    const tfId = (typeof tfArg === 'string' && tfArg) ? tfArg : '1d';
+    setAnalysisTf(tfId); setLastTarget(target);
 
     setLoading(true);
     setError('');
@@ -2827,7 +3156,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
       let p1;
       try {
         setStep('data');
-        p1 = await fetchAnalysisPhase1(target, effectiveMode);
+        p1 = await fetchAnalysisPhase1(target, effectiveMode, tfId);
         setPhase1(p1);
       } catch(e) {
         // Data fetch failed → fall back to pure AI text analysis
@@ -2846,11 +3175,12 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
       setAiLoading(true);
       setStep('vision');
       try {
-        const r = await fetchAnalysisPhase2(p1.ticker, p1.price, p1.computed, apiKey);
+        const r = await fetchAnalysisPhase2(p1, apiKey);
         r._query = target;
         setReport(r);
         // Save to logs
-        const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary};
+        const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary,
+          tf:tfId, score:r.score, price:r.price, entry:r.computed?.tradePlan?.entry1, stop:r.stop_loss, tp1:r.target_price};
         const prev = ls_get('cs_logs')||[];
         ls_set('cs_logs', [...prev.slice(-99), entry]);
         setLogs(prev => [...prev.slice(-99), entry]);
@@ -2861,12 +3191,10 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
       } catch(e) {
         console.error('AI 분석 실패:', e);
         // Show partial report with local data only
-        setReport({
-          ticker: p1.ticker, price: p1.price, computed: p1.computed,
-          position:'hold', confidence:50, signals:[],
-          summary: 'AI 분석에 실패했습니다. 차트 데이터와 기술 지표를 참고하세요.',
-          _query: target, _aiError: true,
-        });
+        const lr = buildLocalReport(p1);
+        lr.summary = `AI 해설 생성에 실패했습니다 (${(e.message||'알 수 없는 오류').slice(0,100)}). 아래 지표 점수와 매매 플랜은 로컬 계산 결과입니다.`;
+        lr._query = target; lr._aiError = true;
+        setReport(lr);
       } finally {
         setAiLoading(false);
         setStep('');
@@ -2898,6 +3226,8 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const cryptoTickers = [{label:'BTC',val:'BTC'},{label:'ETH',val:'ETH'},{label:'SOL',val:'SOL'},{label:'XRP',val:'XRP'},{label:'BNB',val:'BNB'},{label:'ADA',val:'ADA'},{label:'DOGE',val:'DOGE'},{label:'TON',val:'TON'}];
   const autoTickers = QUICK_TICKERS;
   const quickList = mode==='stock' ? stockTickers : mode==='crypto' ? cryptoTickers : autoTickers;
+
+  const shown = report || (phase1 ? buildLocalReport(phase1) : null);
 
   return (
     <div>
@@ -2958,55 +3288,38 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         </div>
       )}
 
-      {(phase1 || report) && !loading && (
+      {shown && !loading && (
         <>
-          {/* Hero: show AI result if available, else placeholder */}
-          {report
-            ? <ReportHero report={report} onSave={()=>{}}/>
-            : <div className="card" style={{padding:'20px 22px',background:'linear-gradient(135deg,#0f172a 70%,#131f35)'}}>
-                <div style={{display:'flex',alignItems:'center',gap:14}}>
-                  <div style={{width:52,height:52,borderRadius:'50%',background:'linear-gradient(135deg,#334155,#475569)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.35rem',fontWeight:900,color:'#94a3b8',flexShrink:0}}>
-                    {((phase1?.ticker||'?')[0]).toUpperCase()}
-                  </div>
-                  <div>
-                    <div style={{fontSize:'1.75rem',fontWeight:900,color:'#f8fafc'}}>{(phase1?.ticker||'').toUpperCase()}</div>
-                    <div style={{fontSize:'1.45rem',fontWeight:700,color:'#e2e8f0',fontFamily:'monospace',marginTop:4}}>
-                      {phase1?.price?`$${phase1.price.toLocaleString(undefined,{maximumFractionDigits:4})}`:'—'}
-                    </div>
-                    <div style={{fontSize:'.82rem',color:'#475569',marginTop:4,display:'flex',alignItems:'center',gap:8}}>
-                      <div className="spinner" style={{width:14,height:14,borderWidth:2}}/>
-                      AI 분석 중...
-                    </div>
-                  </div>
-                </div>
-              </div>
-          }
+          <ReportHero report={shown} aiPending={aiLoading}/>
 
-          <InteractiveChart query={query||phase1?.ticker||report?.ticker} mode={mode} resolvedTicker={phase1?.ticker||report?.ticker}/>
+          <InteractiveChart query={lastTarget||query||phase1?.ticker||report?.ticker} mode={mode}
+            resolvedTicker={phase1?.ticker||report?.ticker}
+            initialTf={analysisTf} analysisTf={analysisTf}
+            onAnalyzeTf={(t)=>handleAnalyze(lastTarget||query, mode, t)}/>
 
           {(phase1?.ticker||report?.ticker) && (
             <div className="card" style={{padding:'12px 16px'}}>
               <div className="card-title" style={{marginBottom:8}}>📺 TradingView</div>
-              <TradingViewWidget ticker={phase1?.ticker||report?.ticker} query={report?._query||query}/>
+              <TradingViewWidget ticker={phase1?.ticker||report?.ticker} query={report?._query||lastTarget||query}/>
             </div>
           )}
 
-          <AnalysisSection report={report || {
-            ticker: phase1?.ticker, price: phase1?.price, computed: phase1?.computed,
-            position:'hold', confidence:50,
-          }}/>
+          <AnalysisSection report={shown}/>
 
-          {/* Conclusion: show spinner while AI loads, result when done */}
           {aiLoading && (
             <div className="card">
-              <div className="card-title">💡 AI 투자 의견</div>
+              <div className="card-title">💡 AI 해설</div>
               <div style={{display:'flex',alignItems:'center',gap:12,padding:'16px 0',color:'#475569',fontSize:'.88rem'}}>
                 <div className="spinner"/>
-                <span>🤖 Gemini AI 심층 분석 중... (10~20초 소요)</span>
+                <span>🤖 지표 계산 결과를 바탕으로 AI 해설을 작성 중... (5~15초)</span>
               </div>
             </div>
           )}
           {!aiLoading && report && <ConclusionSection report={report}/>}
+
+          <div style={{fontSize:'.74rem',color:'#475569',lineHeight:1.6,padding:'4px 6px 12px'}}>
+            ⚠️ 본 분석은 과거 가격 데이터의 지표 계산과 AI 해설에 기반한 참고용 정보이며 투자 권유가 아닙니다. 매매 판단과 손익의 책임은 투자자 본인에게 있습니다.
+          </div>
         </>
       )}
 
