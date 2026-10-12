@@ -30,7 +30,7 @@ const safe = js => js.replace(/<\/script/gi, '<\\/script');   // 인라인 <scri
   // 2) text/babel → 컴파일 + 압축
   const m = html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/);
   if (!m) throw new Error('text/babel 스크립트를 찾지 못함');
-  const compiled = babel.transformSync(m[1], { presets: ['@babel/preset-react'], filename: 'app.jsx', compact: false }).code;
+  const compiled = babel.transformSync(m[1], { presets: [require('@babel/preset-react')], filename: 'app.jsx', compact: false }).code;
   const min = await minify(compiled, { compress: true, mangle: true, format: { comments: false } });
   if (min.error) throw min.error;
   html = html.replace(m[0], () => `<script>${safe(min.code)}</script>`);
@@ -40,7 +40,23 @@ const safe = js => js.replace(/<\/script/gi, '<\\/script');   // 인라인 <scri
   html = html.replace('<title>', () => `<link rel="icon" href="${icon}"/>\n<title>`);
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.writeFileSync(OUT, html);
+  fs.writeFileSync(OUT, html);   // 공개용: 키 없음
+
+  // 개인용: GOOGLE_API_KEY 환경변수 또는 tools/.env.local 의 GOOGLE_API_KEY=... 가 있으면
+  // 키가 내장된 dist/chart-sentinel.local.html 을 추가로 생성 (.gitignore 대상 → 커밋되지 않음)
+  let key = (process.env.GOOGLE_API_KEY || '').trim();
+  const envFile = path.join(__dirname, '.env.local');
+  if (!key && fs.existsSync(envFile)) {
+    const mm = fs.readFileSync(envFile, 'utf8').match(/^\s*GOOGLE_API_KEY\s*=\s*(.+?)\s*$/m);
+    if (mm) key = mm[1].replace(/^["']|["']$/g, '');
+  }
+  if (key) {
+    const slot = /GOOGLE_API_KEY:\s*'[^']*'/;
+    if (!slot.test(html)) throw new Error('DEPLOY_CONFIG의 GOOGLE_API_KEY 자리를 찾지 못함');
+    const localOut = path.join(ROOT, 'dist', 'chart-sentinel.local.html');
+    fs.writeFileSync(localOut, html.replace(slot, () => `GOOGLE_API_KEY: '${key.replace(/'/g, "")}'`));
+    console.log('built dist/chart-sentinel.local.html  (API 키 내장 · 개인용 · 공유/커밋 금지)');
+  }
   const kb = f => (fs.statSync(f).size / 1024).toFixed(0) + ' KB';
   console.log(`built ${path.relative(ROOT, OUT)}  ${kb(OUT)}  (source ${kb(SRC)})`);
 })().catch(e => { console.error('BUILD FAILED:', e.message); process.exit(1); });

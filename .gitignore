@@ -7,3 +7,7 @@ __pycache__/
 analysis_logs.csv
 watchlist.json
 portfolio.json
+
+# API 키가 내장된 개인용 빌드
+dist/*.local.html
+tools/.env.local

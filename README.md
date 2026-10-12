@@ -43,6 +43,18 @@ uvicorn main:app --reload --port 8000
 - 데이터는 Binance / Yahoo Finance 등 외부 API를 브라우저에서 직접 호출하므로 인터넷 연결은 필요합니다.
 - 백테스트 탭의 차트만 처음 실행할 때 Plotly를 내려받습니다.
 
+### 나만 쓸 때: API 키를 파일에 내장하기
+
+매번 키를 입력하기 싫다면 키가 박힌 개인용 파일을 만들 수 있습니다.
+
+```bash
+cd tools && npm install
+echo "GOOGLE_API_KEY=여기에_키" > .env.local   # 이 파일은 git에서 제외됩니다
+npm run build                                   # → dist/chart-sentinel.local.html
+```
+
+`dist/chart-sentinel.local.html`을 열면 키 입력 창 없이 바로 동작합니다. 이 파일은 `.gitignore` 대상이라 커밋되지 않지만, **파일 자체를 남에게 보내거나 공개 저장소·메신저에 올리면 키가 그대로 노출**됩니다. 공개용 `dist/chart-sentinel.html`에는 키가 들어가지 않습니다.
+
 ### 소스 수정 후 다시 만들기
 
 `dist/chart-sentinel.html`은 `chart-sentinel-standalone.html`(원본, 수정은 여기서)을 빌드한 결과물입니다.
