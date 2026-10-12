@@ -32,6 +32,27 @@ uvicorn main:app --reload --port 8000
 
 ---
 
+## 가장 쉬운 사용법 — 파일 하나 (Gemini 버전)
+
+**`dist/chart-sentinel.html` 을 더블클릭해서 브라우저로 열면 끝입니다.** 설치·서버·인터넷 CDN이 필요 없습니다 (React 내장, 로딩 약 0.1초).
+
+1. 첫 실행 시 뜨는 창에 **Google Gemini API 키**를 입력 (무료 발급: https://aistudio.google.com/apikey)
+2. 종목(예: `AAPL`, `삼성전자`, `BTC`)을 검색하면 지표 점수·매매 플랜이 즉시 나오고, AI 해설이 뒤이어 붙습니다.
+
+- 키는 사용 중인 브라우저의 localStorage에만 저장됩니다. 파일에 키를 넣어 공유하지 마세요.
+- 데이터는 Binance / Yahoo Finance 등 외부 API를 브라우저에서 직접 호출하므로 인터넷 연결은 필요합니다.
+- 백테스트 탭의 차트만 처음 실행할 때 Plotly를 내려받습니다.
+
+### 소스 수정 후 다시 만들기
+
+`dist/chart-sentinel.html`은 `chart-sentinel-standalone.html`(원본, 수정은 여기서)을 빌드한 결과물입니다.
+
+```bash
+cd tools && npm install && npm run build   # → dist/chart-sentinel.html
+```
+
+---
+
 ## 독립 실행 (백엔드 없이)
 
 `chart-sentinel.html`을 브라우저에서 직접 열면 Anthropic API를 브라우저에서 직접 호출합니다.
