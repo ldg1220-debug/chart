@@ -833,10 +833,8 @@ function computeScore(o) {
   add('vol','거래량 방향', 15, volVal, volNote);
 
   const score = Math.round(comps.reduce((s,c)=>s+c.contrib, 0));
-  const position = score >= 25 ? 'long' : score <= -25 ? 'short' : 'hold';
-  const confidence = position === 'hold' ? 50 : _clamp(Math.round(50 + Math.abs(score)*0.5), 50, 95);
   const top = [...comps].sort((a,b)=>Math.abs(b.contrib)-Math.abs(a.contrib)).slice(0,4);
-  return {score, position, confidence, comps,
+  return {score, comps,
           signals: top.map(c=>c.note), signalsTone: top.map(c=>c.tone)};
 }
 
@@ -885,6 +883,26 @@ function buildFacts(o) {
   return f;
 }
 
+// 과거 실측 (코인 10종 일봉, 2023-01~2026-09, 판정 후 20일 수익률) — 워크포워드 백테스트로 산출.
+// 신뢰도(%) 대신 이 값을 보여준다. 코인 일봉 외(주식·다른 타임프레임)는 검증 데이터가 없어 표시하지 않음.
+const EMPIRICAL_CRYPTO_1D = {
+  period: '2023-01 ~ 2026-09', horizon: 20,
+  long_75: {n:91,  up:59.3, avg:10.3, med:6.2},
+  long_50: {n:381, up:49.9, avg:5.7,  med:-0.2},
+  long_25: {n:329, up:48.0, avg:2.7,  med:-0.6},
+  bear:    {n:99,  up:46.5, avg:0.6,  med:-1.7},
+  neutral: {n:850, up:48.0, avg:2.1,  med:-0.8},
+  avoid:   {n:987, up:49.4, avg:1.3,  med:-0.1},
+  all:     {n:2737,up:49.1, avg:2.6,  med:-0.4},
+};
+
+// 판정: 롱(≥+25) / 관망 / 매수 회피(≤−25, 숏 신호는 검증상 예측력 없음) / BTC 하락장 필터(코인 롱인데 BTC가 200일선 아래)
+function decideStance(score, regime) {
+  let stance = score >= 25 ? 'long' : score <= -25 ? 'avoid' : 'neutral';
+  if (stance === 'long' && regime && regime.btcAbove === false) stance = 'bear';
+  return stance;
+}
+
 function computeTechIndicators(ohlcv, opts={}) {
   if (!ohlcv || ohlcv.length < 2) return null;
   const tfId = TF_PRESETS[opts.tf] ? opts.tf : '1d';
@@ -923,8 +941,7 @@ function computeTechIndicators(ohlcv, opts={}) {
 
   const levels = collectLevels(price, atrV, {maSet, bb:bbLast, fibs, swing, rounds});
   const sc = computeScore({price, closes, ohlcv, maSet, macd, rsiV:rsi14v, bb:bbLast, atrPct});
-  const planDir = sc.score >= 0 ? 'long' : 'short';
-  const tradePlan = buildTradePlan(planDir, price, atrV, levels, swing, fibExts);
+  const tradePlan = buildTradePlan('long', price, atrV, levels, swing, fibExts);   // 숏 플랜은 제공하지 않음
   const facts = buildFacts({ohlcv, closes, maSet, macd, rsiArr, swing, atrV, price, P});
 
   const vols = ohlcv.map(d=>d.volume||0);
@@ -943,7 +960,13 @@ function computeTechIndicators(ohlcv, opts={}) {
     volTrend, fib90: {high:hi, low:lo}, fibDir: upSwing ? 'up' : 'down', swingBars: win.length,
     fibs, fibExts, rounds, levels, tradePlan, facts,
     score: sc.score, scoreBreakdown: sc.comps,
-    verdict: {position: sc.position, confidence: sc.confidence},
+    verdict: (() => {
+      const stance = decideStance(sc.score, opts.regime);
+      const bucket = stance === 'long' ? (sc.score>=75 ? 'long_75' : sc.score>=50 ? 'long_50' : 'long_25') : stance;
+      const stats = (opts.market === 'crypto' && tfId === '1d') ? {...EMPIRICAL_CRYPTO_1D[bucket], bucket} : null;
+      return {stance, position: stance === 'long' ? 'long' : 'hold', confidence: stats ? Math.round(stats.up) : null, stats};
+    })(),
+    regime: opts.regime || null,
     signals: sc.signals, signalsTone: sc.signalsTone, riskLevel,
   };
 }
@@ -960,7 +983,7 @@ function buildLocalReport(p1) {
   const tf = TIMEFRAMES.find(t=>t.id===p1.tfId);
   return {
     ticker: p1.ticker, price: p1.price, computed: c, tfId: p1.tfId, tfLabel: tf ? tf.label : '일봉',
-    position: c.verdict.position, confidence: c.verdict.confidence,
+    position: c.verdict.position, confidence: c.verdict.confidence, stance: c.verdict.stance, stats: c.verdict.stats, regime: c.regime,
     score: c.score, scoreBreakdown: c.scoreBreakdown,
     signals: c.signals, signalsTone: c.signalsTone,
     support: c.levels.supports[0]?.price ?? null,
@@ -1935,7 +1958,7 @@ function buildAiContext(p1) {
   const rows = candles.slice(-40);
   const v20 = _avg(candles.slice(-20).map(d=>d.volume||0)) || 0;
   const table = rows.map(d => `${String(d.date).slice(2,16)} | ${f(d.open)} ${f(d.high)} ${f(d.low)} ${f(d.close)} | ${v20>0 ? ((d.volume||0)/v20).toFixed(2)+'x' : '-'}`).join('\n');
-  const posKo = {long:'롱(상승 우위)', short:'숏(하락 우위)', hold:'관망(중립)'}[c.verdict.position];
+  const posKo = {long:'롱(상승 우위)', neutral:'관망(중립)', avoid:'매수 회피(하락 우위)', bear:'관망(BTC 하락장 필터 — 지표는 롱이지만 BTC가 200일선 아래)'}[c.verdict.stance];
   const comps = c.scoreBreakdown.map(x => `- ${x.label}: ${x.note} (기여 ${x.contrib>=0?'+':''}${x.contrib.toFixed(1)} / 가중 ${x.weight})`).join('\n');
   const maLine = c.maSet.map(m => `MA${m.n}: ${f(m.v)}${m.v!=null ? (p1.price>m.v?' (현재가 위)':' (현재가 아래)') : ''}`).join(' / ');
   const m = c.macd;
@@ -1946,7 +1969,7 @@ function buildAiContext(p1) {
     text: `[분석 대상] ${p1.ticker} | 타임프레임 ${tf ? tf.label : '일봉'} | 가격 단위 ${unit} | 현재가 ${f(p1.price)}
 
 [확정된 지표 결론 — 변경 불가]
-지표 점수 ${c.score} / ±100 → ${posKo}, 신뢰도 ${c.verdict.confidence}% (롱 ≥ +25, 숏 ≤ −25, 그 사이 관망)
+지표 점수 ${c.score} / ±100 → ${posKo} (롱 ≥ +25, 매수 회피 ≤ −25, 그 사이 관망)${c.regime && !c.regime.unknown ? `\nBTC 국면: 종가 ${f(c.regime.btcPrice)} / 200일선 ${f(c.regime.btcMa200)} → ${c.regime.btcAbove ? '200일선 위(정상)' : '200일선 아래(하락장 필터 작동)'}` : ''}${c.verdict.stats ? `\n과거 실측(코인 일봉 ${EMPIRICAL_CRYPTO_1D.period}): 이 판정 구간의 20일 후 상승 비율 ${c.verdict.stats.up}%, 평균 ${c.verdict.stats.avg}%, 중앙값 ${c.verdict.stats.med}% (n=${c.verdict.stats.n})` : ''}
 ${comps}
 
 [계산된 지표]
@@ -1964,7 +1987,7 @@ ${c.facts.map(x=>'- '+x).join('\n')}
 지지: ${lv(c.levels.supports)}
 저항: ${lv(c.levels.resistances)}
 
-[매매 플랜 (로컬 계산, ${plan.direction==='long'?'롱':'숏'} 시나리오)]
+[매매 플랜 (로컬 계산, 롱 시나리오${c.verdict.stance==='long' ? '' : ' — 현재 판정이 롱이 아니므로 참고용 조건부'})]
 진입1 ${f(plan.entry1)} (${plan.entryMode==='market'?'현재가 부근':'지정가'}) / 진입2 ${f(plan.entry2)} / 손절 ${f(plan.stopLoss)} (리스크 ${plan.riskPct.toFixed(2)}%)
 익절1 ${f(plan.profit1)} (R:R ${plan.rr1?.toFixed(2)}) / 익절2 ${f(plan.profit2)} (R:R ${plan.rr2?.toFixed(2)}) / 익절3 ${f(plan.profit3)} (R:R ${plan.rr3?.toFixed(2)})
 
@@ -1985,7 +2008,7 @@ async function callGeminiCombined(p1, apiKey) {
 ${ctx.text}
 
 작성 규칙 (반드시 준수):
-1. 포지션은 위 "확정된 지표 결론"(${ctx.posKo})으로 이미 정해졌습니다. 반대 결론을 내거나 뒤집지 말고, 그 결론의 근거와 리스크를 해설하세요.
+1. 판정은 위 "확정된 지표 결론"(${ctx.posKo})으로 이미 정해졌습니다. 반대 결론을 내거나 뒤집지 말고, 그 결론의 근거와 리스크를 해설하세요. 공매도(숏) 진입은 권하지 마세요 — 이 앱의 하락 신호는 과거 검증에서 예측력이 없었습니다.\n   과거 실측 통계가 주어졌다면 확률을 과장하지 말고 그 수치 그대로 언급하세요.
 2. 위에 제공된 수치·가격만 인용하세요. 새로운 가격이나 수치를 만들지 마세요.
 3. 제공되지 않은 정보(엘리엇 파동, 뉴스, 펀더멘털, 온체인 등)는 추정하거나 단정하지 마세요.
 4. 각 항목은 수치 나열이 아니라 "그래서 지금 매매에 어떤 의미인지"를 2~3문장으로 해석하세요.
@@ -2023,6 +2046,16 @@ ${ctx.text}
   }
 }
 
+// BTC 일봉 종가가 200일 이동평균 위인지 (진행 중 캔들 제외)
+async function fetchBtcRegime() {
+  const d = await fetchOHLCV('BTC', '1y', 'crypto');
+  const closes = d.slice(0, -1).map(x => x.close);
+  if (closes.length < 200) throw new Error('BTC 데이터 부족');
+  const ma200 = closes.slice(-200).reduce((a,b)=>a+b,0)/200;
+  const last = closes[closes.length-1];
+  return {btcAbove: last > ma200, btcPrice: last, btcMa200: ma200};
+}
+
 // ─── Phase 1: 데이터 + 로컬 지표/점수/플랜 (AI 불필요, 즉시) ───────────────
 async function fetchAnalysisPhase1(query, mode='auto', tfId='1d') {
   let {ticker, type} = resolveTicker(query, mode);
@@ -2037,13 +2070,19 @@ async function fetchAnalysisPhase1(query, mode='auto', tfId='1d') {
   }
 
   // 일봉은 1년치(MA200 확보), 그 외는 타임프레임 설정 사용
+  const btcRegimeP = type === 'crypto' ? fetchBtcRegime() : null;   // 본 데이터와 병렬 조회
+  if (btcRegimeP) btcRegimeP.catch(() => {});
   const ohlcv = tfCfg.id === '1d'
     ? await fetchOHLCV(query, '1y', mode)
     : await fetchOHLCVForTimeframe(query, tfCfg, mode);
   if (!ohlcv || ohlcv.length < 30) throw new Error('데이터 부족');
 
   const {closed, price} = prepareCandles(ohlcv, type);
-  const computed = computeTechIndicators(closed, {tf: tfCfg.id, price});
+  let regime = null;
+  if (type === 'crypto') {
+    try { regime = await btcRegimeP; } catch { regime = {unknown: true}; }
+  }
+  const computed = computeTechIndicators(closed, {tf: tfCfg.id, price, regime, market: type});
   return {ticker, type, ohlcv, candles: closed, price, computed, tfId: tfCfg.id};
 }
 
@@ -2186,7 +2225,7 @@ function saveWatchlist(w) { ls_set(WATCHLIST_KEY, w); }
 // ─── Alerts ───────────────────────────────────────────────────────────────────
 async function sendTelegramAlert(report, settings) {
   if(!settings.telegramToken || !settings.telegramChatId) return false;
-  const msg = `📊 *${report.ticker}* 분석 완료\n포지션: ${report.position}\n신뢰도: ${report.confidence}%\n\n${report.summary?.slice(0,300)}`;
+  const msg = `📊 *${report.ticker}* 분석 완료\n판정: ${report.position}${report.score!=null?` (지표 점수 ${report.score})`:''}${report.confidence!=null?`\n과거 20일 상승 비율: ${report.confidence}%`:''}\n\n${report.summary?.slice(0,300)}`;
   const url = `https://api.telegram.org/bot${settings.telegramToken}/sendMessage`;
   const resp = await fetch(url, {
     method:'POST', headers:{'content-type':'application/json'},
@@ -2202,7 +2241,8 @@ async function sendDiscordAlert(report, settings) {
     color: report.position==='long'?0x22c55e : report.position==='short'?0xef4444 : 0xfbbf24,
     fields:[
       {name:'포지션',value:report.position||'-',inline:true},
-      {name:'신뢰도',value:`${report.confidence||50}%`,inline:true},
+      {name:'지표 점수',value:report.score!=null?String(report.score):'-',inline:true},
+      {name:'과거 20일 상승',value:report.confidence!=null?`${report.confidence}%`:'-',inline:true},
       {name:'현재가',value:report.price?`$${report.price.toLocaleString()}`:'-',inline:true},
     ],
     description: report.summary?.slice(0,300),
@@ -2408,7 +2448,13 @@ function TradePlanSection({computed, report}) {
   const price = computed.price;
   const isLong = plan.direction === 'long';
   const side = isLong ? 1 : -1;
-  const neutral = Math.abs(computed.score||0) < 25;
+  const stance = stanceOf(report);
+  if (stance === 'avoid') return (
+    <div style={{background:'#0a0f1a',border:'1px solid #7f1d1d',borderRadius:10,padding:'14px 16px',marginBottom:12,fontSize:'.83rem',color:'#fca5a5',lineHeight:1.7}}>
+      ✕ <b>매수 회피 구간</b> — 지표 점수가 −25 이하라 매수 플랜을 제시하지 않습니다.<br/>
+      <span style={{color:'#64748b'}}>숏(공매도) 플랜은 제공하지 않습니다. 과거 검증(코인 10종, 2019~2026)에서 하락 신호의 예측력이 확인되지 않았습니다.</span>
+    </div>
+  );
   const distPct = v => (v/price - 1) * 100;
   const retPct  = v => side * (v/plan.entry1 - 1) * 100;
 
@@ -2428,7 +2474,8 @@ function TradePlanSection({computed, report}) {
     <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8,padding:'10px 12px',borderBottom:'1px solid #1e293b',background:'#0f172a'}}>
         <span style={{fontWeight:800,fontSize:'.85rem',color:dirColor}}>{isLong ? '▲ 롱 플랜' : '▼ 숏 플랜'}</span>
-        {neutral && <span style={{fontSize:'.74rem',color:'#fbbf24'}}>⚠ 지표 점수가 중립 구간(±25 이내)이라 조건부 시나리오입니다</span>}
+        {stance==='neutral' && <span style={{fontSize:'.74rem',color:'#fbbf24'}}>⚠ 관망 구간(점수 ±25 이내) — 참고용 조건부 시나리오입니다</span>}
+        {stance==='bear' && <span style={{fontSize:'.74rem',color:'#fb923c'}}>⚠ BTC가 200일선 아래 — 과거 하락장(2022)에서 롱 신호는 손실이었습니다. 진입 비권장</span>}
       </div>
       <div style={{overflowX:'auto'}}>
       <table style={{width:'100%',borderCollapse:'collapse',minWidth:420}}>
@@ -2468,20 +2515,23 @@ function TradePlanSection({computed, report}) {
   );
 }
 
+// 판정(stance)별 표시 — 텍스트 분석 등 stance 없는 리포트는 position으로 추정
+const STANCE_UI = {
+  long:    {label:'LONG',     sub:'상승 우위',          icon:'↗', color:'#22c55e', bg:'#052e16', border:'#166534'},
+  neutral: {label:'HOLD',     sub:'관망',               icon:'→', color:'#f59e0b', bg:'#451a03', border:'#92400e'},
+  avoid:   {label:'매수 회피', sub:'하락 우위',          icon:'✕', color:'#f87171', bg:'#450a0a', border:'#7f1d1d'},
+  bear:    {label:'HOLD',     sub:'BTC 하락장 필터',    icon:'⛨', color:'#fb923c', bg:'#431407', border:'#9a3412'},
+};
+const stanceOf = r => r?.stance || (r?.position==='long' ? 'long' : 'neutral');
+
 function ReportHero({report, aiPending}) {
   if(!report) return null;
-  const pos = report.position || 'hold';
-  const posColor = pos==='long'?'#22c55e':pos==='short'?'#ef4444':'#f59e0b';
-  const posBg    = pos==='long'?'#052e16':pos==='short'?'#450a0a':'#451a03';
-  const posBorder= pos==='long'?'#166534':pos==='short'?'#7f1d1d':'#92400e';
-  const posIcon  = pos==='long'?'↗':pos==='short'?'↙':'→';
-  const posLabel = pos==='long'?'LONG':pos==='short'?'SHORT':'HOLD';
-  const posSub   = pos==='long'?'상승 우위':pos==='short'?'하락 우위':'관망';
+  const st = STANCE_UI[stanceOf(report)];
   const curPrice = report.price ? Number(report.price) : null;
-  const conf = Math.min(100, Math.max(0, report.confidence || 50));
+  const stats = report.stats;          // 과거 실측 (코인 일봉만)
   const ticker = (report.ticker||'').toUpperCase();
   const letter = ticker[0] || '?';
-  const R = 28, circ = 2*Math.PI*R, dash = circ*(1-conf/100);
+  const R = 28, circ = 2*Math.PI*R, dash = circ*(1-(stats ? stats.up : 0)/100);
   const palette = {
     pos:{bg:'#052e16',border:'#166534',color:'#4ade80'},
     neg:{bg:'#450a0a',border:'#7f1d1d',color:'#f87171'},
@@ -2507,21 +2557,22 @@ function ReportHero({report, aiPending}) {
           </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
-          <div style={{background:posBg,border:`1.5px solid ${posBorder}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}
-               title="포지션은 AI가 아니라 지표 점수(±25 기준)로 결정됩니다">
-            <div style={{fontSize:'1.15rem',fontWeight:900,color:posColor,letterSpacing:'0.04em'}}>{posIcon} {posLabel}</div>
-            <div style={{fontSize:'.7rem',color:posColor+'99',marginTop:2}}>
-              {posSub}{report.score!=null ? ` · 점수 ${report.score>0?'+':''}${report.score}` : ''}
+          <div style={{background:st.bg,border:`1.5px solid ${st.border}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}
+               title="판정은 AI가 아니라 지표 점수(롱 ≥ +25, 매수 회피 ≤ −25)와 BTC 200일선 필터로 결정됩니다">
+            <div style={{fontSize:'1.15rem',fontWeight:900,color:st.color,letterSpacing:'0.04em'}}>{st.icon} {st.label}</div>
+            <div style={{fontSize:'.7rem',color:st.color+'99',marginTop:2}}>
+              {st.sub}{report.score!=null ? ` · 점수 ${report.score>0?'+':''}${report.score}` : ''}
             </div>
           </div>
-          <div style={{position:'relative',width:74,height:74,flexShrink:0}} title="신뢰도 = 50 + |지표 점수| × 0.5 (관망은 50)">
+          <div style={{position:'relative',width:74,height:74,flexShrink:0}}
+               title={stats ? `과거 실측: 코인 10종 일봉 ${EMPIRICAL_CRYPTO_1D.period}, 같은 판정 구간 ${stats.n}회 중 20일 후 상승 비율` : '코인 일봉 외에는 과거 검증 데이터가 없습니다'}>
             <svg width="74" height="74" style={{transform:'rotate(-90deg)',display:'block'}}>
               <circle cx="37" cy="37" r={R} fill="none" stroke="#1e293b" strokeWidth="6"/>
-              <circle cx="37" cy="37" r={R} fill="none" stroke={posColor} strokeWidth="6" strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>
+              {stats && <circle cx="37" cy="37" r={R} fill="none" stroke={st.color} strokeWidth="6" strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>}
             </svg>
             <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
-              <span style={{fontSize:'1.05rem',fontWeight:800,color:'#f8fafc',lineHeight:1}}>{conf}%</span>
-              <span style={{fontSize:'.6rem',color:'#64748b',marginTop:1}}>신뢰도</span>
+              <span style={{fontSize:'1.05rem',fontWeight:800,color:'#f8fafc',lineHeight:1}}>{stats ? `${Math.round(stats.up)}%` : '—'}</span>
+              <span style={{fontSize:'.56rem',color:'#64748b',marginTop:2,textAlign:'center',lineHeight:1.15}}>{stats ? <>과거 20일<br/>상승 비율</> : <>검증<br/>데이터 없음</>}</span>
             </div>
           </div>
           {report.risk_level && (
@@ -2531,6 +2582,14 @@ function ReportHero({report, aiPending}) {
           )}
         </div>
       </div>
+      {(stats || report.regime) && (
+        <div style={{display:'flex',flexWrap:'wrap',gap:'6px 16px',fontSize:'.76rem',color:'#64748b',marginBottom:12,padding:'8px 12px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8}}>
+          {stats && <span>📊 과거 실측 ({EMPIRICAL_CRYPTO_1D.period}, n={stats.n}): 20일 후 평균 <b style={{color:stats.avg>=0?'#4ade80':'#f87171'}}>{stats.avg>=0?'+':''}{stats.avg}%</b> · 중앙값 <b style={{color:stats.med>=0?'#4ade80':'#f87171'}}>{stats.med>=0?'+':''}{stats.med}%</b> <span style={{color:'#475569'}}>(전체 평균 +{EMPIRICAL_CRYPTO_1D.all.avg}% · 상승 {EMPIRICAL_CRYPTO_1D.all.up}%)</span></span>}
+          {report.regime && (report.regime.unknown
+            ? <span>₿ BTC 국면 확인 실패 — 하락장 필터 미적용</span>
+            : <span>₿ BTC {report.regime.btcAbove ? <b style={{color:'#4ade80'}}>200일선 위</b> : <b style={{color:'#fb923c'}}>200일선 아래 (하락장 필터 작동)</b>} · {fmtPx(report.regime.btcPrice,'BTC')} / MA200 {fmtPx(report.regime.btcMa200,'BTC')}</span>)}
+        </div>
+      )}
       {report.signals?.length>0 && (
         <div>
           <div style={{fontSize:'.7rem',fontWeight:700,color:'#334155',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS (지표 기반)</div>
@@ -2545,7 +2604,7 @@ function ReportHero({report, aiPending}) {
       {aiPending && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:12,fontSize:'.8rem',color:'#64748b'}}>
           <div className="spinner" style={{width:14,height:14,borderWidth:2}}/>
-          AI 해설 생성 중... (포지션·점수·매매 플랜은 지표 계산으로 이미 확정)
+          AI 해설 생성 중... (판정·점수·매매 플랜은 지표 계산으로 이미 확정)
         </div>
       )}
       {(report._dataError||report._noData) && (
@@ -2606,7 +2665,7 @@ function AnalysisSection({report}) {
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:6}}>
             <span style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>🧮 지표 점수 분해</span>
             <span style={{fontSize:'.78rem',color:'#64748b'}}>
-              합계 <b style={{color:report.score>=25?'#4ade80':report.score<=-25?'#f87171':'#fbbf24',fontSize:'.95rem'}}>{report.score>0?'+':''}{report.score}</b> / ±100 · 롱 ≥ +25 · 숏 ≤ −25
+              합계 <b style={{color:report.score>=25?'#4ade80':report.score<=-25?'#f87171':'#fbbf24',fontSize:'.95rem'}}>{report.score>0?'+':''}{report.score}</b> / ±100 · 롱 ≥ +25 · 매수 회피 ≤ −25
             </span>
           </div>
           {report.scoreBreakdown.map(c=>(
@@ -2629,7 +2688,7 @@ function AnalysisSection({report}) {
 
       {/* 매매 플랜 */}
       <div style={{marginBottom:16}}>
-        <div style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반)</div>
+        <div style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반 · 롱 전용)</div>
         <TradePlanSection computed={computed} report={report}/>
       </div>
 
@@ -2683,7 +2742,7 @@ function AnalysisSection({report}) {
               {bb && curPrice && <MetricRow label="볼린저밴드" value={curPrice>=bb.upper?'상단 돌파':curPrice<=bb.lower?'하단 이탈':'밴드 내부'} valueColor={curPrice>=bb.upper?'#f87171':curPrice<=bb.lower?'#4ade80':'#94a3b8'}/>}
               {computed.atrPct!=null && <MetricRow label="ATR 변동성" value={`${computed.atrPct.toFixed(2)}%`} valueColor="#94a3b8"/>}
               {vt && <MetricRow label="거래량 추세" value={`5봉/20봉 ${vt.r5_20.toFixed(2)}배`} valueColor={vt.r5_20>=1.2?'#4ade80':vt.r5_20<=0.8?'#f87171':'#94a3b8'}/>}
-              <MetricRow label="종합 판정" value={pos==='long'?'롱 우위':pos==='short'?'숏 우위':'관망'} valueColor={pos==='long'?'#4ade80':pos==='short'?'#f87171':'#fbbf24'}/>
+              <MetricRow label="종합 판정" value={STANCE_UI[stanceOf(report)].sub} valueColor={STANCE_UI[stanceOf(report)].color}/>
             </div>
           </div>
         </div>
@@ -2698,11 +2757,8 @@ function AnalysisSection({report}) {
 function ConclusionSection({report}) {
   const [open, setOpen] = React.useState(true);
   if(!report) return null;
-  const pos = report.position || 'hold';
-  const outlookColor = pos==='long'?'#4ade80':pos==='short'?'#f87171':'#fbbf24';
-  const outlookLabel = pos==='long'?'강세 (Bullish)':pos==='short'?'약세 (Bearish)':'중립 (Neutral)';
-  const conf = Math.min(100, Math.max(0, report.confidence||50));
-  const stars = Math.round(conf/20);
+  const st = STANCE_UI[stanceOf(report)];
+  const stats = report.stats;
   const OpinionRow = ({label, value, valueColor}) => (
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
       <span style={{color:'#64748b'}}>{label}</span>
@@ -2735,12 +2791,9 @@ function ConclusionSection({report}) {
             </div>
           </div>
           <div style={{padding:'14px'}}>
-            <OpinionRow label="시장 전망" value={outlookLabel} valueColor={outlookColor}/>
+            <OpinionRow label="판정" value={`${st.label} · ${st.sub}`} valueColor={st.color}/>
             <OpinionRow label="투자 기간" value={report.time_horizon||'중기 (수주~3개월)'} valueColor="#60a5fa"/>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
-              <span style={{color:'#64748b'}}>확신 강도</span>
-              <span>{[1,2,3,4,5].map(i=><span key={i} style={{fontSize:'1rem',color:i<=stars?'#fbbf24':'#334155'}}>★</span>)}</span>
-            </div>
+            <OpinionRow label="과거 실측 (20일)" value={stats ? `상승 ${stats.up}% · 평균 ${stats.avg>=0?'+':''}${stats.avg}%` : '검증 데이터 없음'} valueColor={stats ? (stats.up>=55?'#4ade80':'#94a3b8') : '#475569'}/>
             <OpinionRow label="적합 유형" value={report.setup_type||'스윙 트레이더'} valueColor="#94a3b8"/>
           </div>
         </div>
@@ -3102,12 +3155,12 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         r._query = target;
         setReport(r);
         // Save to logs
-        const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary,
+        const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, stance:r.stance, summary:r.summary,
           tf:tfId, score:r.score, price:r.price, entry:r.computed?.tradePlan?.entry1, stop:r.stop_loss, tp1:r.target_price};
         const prev = ls_get('cs_logs')||[];
         ls_set('cs_logs', [...prev.slice(-99), entry]);
         setLogs(prev => [...prev.slice(-99), entry]);
-        if(settings.autoAlert && r.confidence>=settings.alertThreshold) {
+        if(settings.autoAlert && r.position==='long' && (r.score??-999)>=settings.alertThreshold) {
           if(settings.telegramToken) sendTelegramAlert(r, settings).catch(()=>{});
           if(settings.discordWebhook) sendDiscordAlert(r, settings).catch(()=>{});
         }
@@ -3254,14 +3307,14 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
           </div>
           <div style={{maxHeight:300,overflowY:'auto'}}>
             <table>
-              <thead><tr><th>날짜</th><th>티커</th><th>포지션</th><th>신뢰도</th></tr></thead>
+              <thead><tr><th>날짜</th><th>티커</th><th>포지션</th><th>과거 상승률</th></tr></thead>
               <tbody>
                 {[...logs].reverse().slice(0,50).map((l,i)=>(
                   <tr key={i}>
                     <td style={{fontSize:'.75rem',color:'#64748b'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
                     <td style={{fontWeight:700}}>{l.ticker}</td>
                     <td><span className={`badge ${l.position==='long'?'badge-green':l.position==='short'?'badge-red':'badge-yellow'}`}>{l.position}</span></td>
-                    <td>{l.confidence}%</td>
+                    <td>{l.confidence!=null ? `${l.confidence}%` : '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3333,13 +3386,13 @@ function CompareTab({apiKey, serverHasKey}) {
           <div className="card">
             <div className="card-title">📊 비교 요약</div>
             <table>
-              <thead><tr><th>종목</th><th>포지션</th><th>신뢰도</th><th>현재가</th><th>목표가</th><th>리스크</th></tr></thead>
+              <thead><tr><th>종목</th><th>포지션</th><th>과거 상승률</th><th>현재가</th><th>목표가</th><th>리스크</th></tr></thead>
               <tbody>
                 {results.map((r,i)=>(
                   <tr key={i}>
                     <td style={{fontWeight:700,color:'#60a5fa'}}>{r.ticker}</td>
                     <td><span className={`badge ${r.position==='long'?'badge-green':r.position==='short'?'badge-red':'badge-yellow'}`}>{r.position||'hold'}</span></td>
-                    <td>{r.confidence||0}%</td>
+                    <td>{r.confidence!=null ? `${r.confidence}%` : '—'}</td>
                     <td>{r.price?`$${r.price.toLocaleString()}`:'-'}</td>
                     <td>{r.target_price?`$${r.target_price.toLocaleString()}`:'-'}</td>
                     <td><span className={`badge ${r.risk_level==='low'?'badge-green':r.risk_level==='high'?'badge-red':'badge-yellow'}`}>{r.risk_level||'-'}</span></td>
@@ -3421,14 +3474,14 @@ function PerformanceTab({apiKey, serverHasKey}) {
               ))}
             </div>
             <table>
-              <thead><tr><th>날짜</th><th>티커</th><th>포지션</th><th>신뢰도</th></tr></thead>
+              <thead><tr><th>날짜</th><th>티커</th><th>포지션</th><th>과거 상승률</th></tr></thead>
               <tbody>
                 {[...logs].reverse().slice(0,20).map((l,i)=>(
                   <tr key={i}>
                     <td style={{fontSize:'.75rem',color:'#64748b'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
                     <td style={{fontWeight:700}}>{l.ticker}</td>
                     <td><span className={`badge ${l.position==='long'?'badge-green':l.position==='short'?'badge-red':'badge-yellow'}`}>{l.position}</span></td>
-                    <td>{l.confidence}%</td>
+                    <td>{l.confidence!=null ? `${l.confidence}%` : '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3888,9 +3941,9 @@ function SettingsDrawer({settings, onSave, onClose, serverHasKey}) {
         <div className="settings-group">
           <label style={{display:'flex',gap:8,alignItems:'center'}}>
             <input type="checkbox" checked={s.autoAlert} onChange={e=>set('autoAlert',e.target.checked)} style={{width:'auto'}}/>
-            자동 알림 (신뢰도 {s.alertThreshold}% 이상)
+            자동 알림 (롱 판정 + 지표 점수 {s.alertThreshold} 이상)
           </label>
-          <input type="range" min="50" max="95" value={s.alertThreshold} onChange={e=>set('alertThreshold',parseInt(e.target.value))} style={{marginTop:6}}/>
+          <input type="range" min="25" max="95" value={s.alertThreshold} onChange={e=>set('alertThreshold',parseInt(e.target.value))} style={{marginTop:6}}/>
         </div>
 
         <div className="settings-group">
