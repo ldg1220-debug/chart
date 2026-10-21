@@ -12,9 +12,9 @@
 body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-height:100vh}
 .app-header{background:linear-gradient(135deg,#1e293b,#0f172a);border-bottom:1px solid #334155;padding:16px 24px;display:flex;align-items:center;gap:12px}
 .app-header h1{font-size:1.5rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.app-header .subtitle{font-size:.8rem;color:#64748b}
+.app-header .subtitle{font-size:.8rem;color:#8794a8}
 .tabs{display:flex;gap:4px;padding:12px 24px;background:#0f172a;border-bottom:1px solid #1e293b;overflow-x:auto}
-.tab-btn{padding:8px 16px;border:none;border-radius:8px;background:transparent;color:#64748b;cursor:pointer;font-size:.85rem;white-space:nowrap;transition:all .2s}
+.tab-btn{padding:8px 16px;border:none;border-radius:8px;background:transparent;color:#8794a8;cursor:pointer;font-size:.85rem;white-space:nowrap;transition:all .2s}
 .tab-btn:hover{background:#1e293b;color:#e2e8f0}
 .tab-btn.active{background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;font-weight:600}
 .main-content{padding:24px;max-width:1400px;margin:0 auto}
@@ -45,6 +45,43 @@ button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 @media(max-width:768px){.grid-2,.grid-3{grid-template-columns:1fr}}
+/* 결과 화면 섹션 메뉴 */
+.sec-nav{position:sticky;top:0;z-index:50;display:flex;gap:6px;overflow-x:auto;padding:8px 2px;margin:-6px 0 12px;background:rgba(15,23,42,.92);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);scrollbar-width:none}
+.sec-nav::-webkit-scrollbar{display:none}
+.sec-nav a{flex:0 0 auto;padding:6px 14px;border-radius:999px;border:1px solid #334155;background:#1e293b;color:#cbd5e1;font-size:.82rem;font-weight:600;text-decoration:none;white-space:nowrap}
+.sec-nav a:hover{border-color:#3b82f6;color:#fff}
+[id^="sec-"]{scroll-margin-top:56px}
+.seg-tabs{display:inline-flex;border:1px solid #334155;border-radius:8px;overflow:hidden;margin-bottom:10px}
+.seg-tabs button{border-radius:0;padding:7px 16px;font-size:.82rem;background:#0f172a;color:#94a3b8}
+.seg-tabs button.on{background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff}
+.action-box{margin:0 0 14px;padding:12px 14px;border-radius:10px;background:#0a0f1a;border:1px solid #1e293b;font-size:.92rem;line-height:1.6;color:#e2e8f0}
+.action-box .k{font-size:.74rem;font-weight:700;letter-spacing:.06em;color:#94a3b8;margin-right:8px}
+.score-row{display:grid;grid-template-columns:minmax(110px,1.1fr) minmax(80px,1.4fr) minmax(0,2.2fr);gap:10px;align-items:center;padding:5px 0;font-size:.8rem}
+.price-tags{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
+.fib-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.fib-row{display:grid;grid-template-columns:72px 1fr 64px;gap:8px;padding:5px 0;border-bottom:1px solid #1e293b;font-size:.82rem;white-space:nowrap}
+.fib-row span:nth-child(2){text-align:right;font-variant-numeric:tabular-nums}
+.fib-row span:nth-child(3){text-align:right}
+.mob-only{display:none}
+details>summary{list-style:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:'▸ ';color:#8794a8}
+details[open]>summary::before{content:'▾ '}
+@media(max-width:600px){
+  .main-content{padding:12px}
+  .card{padding:14px;border-radius:10px}
+  .score-row{grid-template-columns:1fr auto;gap:4px 10px;padding:7px 0;border-bottom:1px solid #111827}
+  .score-row .bar{grid-column:1 / -1;order:3}
+  .score-row .note{grid-column:1 / -1;order:4;font-size:.76rem}
+  .price-tags{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fib-grid{grid-template-columns:1fr}
+  .plan-table .col-sub{display:none}
+  .plan-table .mob-only{display:block;font-size:.72rem;color:#94a3b8;font-weight:500;margin-top:2px;white-space:normal}
+  .plan-table td:first-child{white-space:normal !important}
+  .plan-table td:nth-child(2){font-size:.84rem !important}
+  .plan-table td,.plan-table th{padding:9px 8px !important}
+  .plan-table{min-width:0 !important}
+}
 .analyze-box{display:flex;gap:8px;margin-bottom:16px}
 .analyze-box input{flex:1}
 .report-section{margin-top:8px}
@@ -53,13 +90,13 @@ button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:
 .chart-img{width:100%;border-radius:8px;border:1px solid #334155;margin-top:8px}
 .stat-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;text-align:center}
 .stat-value{font-size:1.5rem;font-weight:700;color:#60a5fa}
-.stat-label{font-size:.8rem;color:#64748b;margin-top:4px}
+.stat-label{font-size:.8rem;color:#8794a8;margin-top:4px}
 .pos-long{color:#34d399}
 .pos-short{color:#f87171}
 .pos-hold{color:#fbbf24}
 .pos-none{color:#94a3b8}
 table{width:100%;border-collapse:collapse}
-th{background:#0f172a;padding:10px 12px;text-align:left;font-size:.8rem;color:#64748b;border-bottom:1px solid #334155}
+th{background:#0f172a;padding:10px 12px;text-align:left;font-size:.8rem;color:#8794a8;border-bottom:1px solid #334155}
 td{padding:10px 12px;font-size:.85rem;border-bottom:1px solid #1e293b}
 tr:hover td{background:#0f172a}
 .settings-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;justify-content:flex-end}
@@ -77,7 +114,7 @@ tr:hover td{background:#0f172a}
 .alert-warn{background:#451a03;border:1px solid #d97706;color:#fcd34d}
 .alert-err{background:#450a0a;border:1px solid #dc2626;color:#fca5a5}
 .alert-ok{background:#064e3b;border:1px solid #059669;color:#6ee7b7}
-.drop-zone{border:2px dashed #334155;border-radius:8px;padding:32px;text-align:center;cursor:pointer;transition:all .2s;color:#64748b}
+.drop-zone{border:2px dashed #334155;border-radius:8px;padding:32px;text-align:center;cursor:pointer;transition:all .2s;color:#8794a8}
 .drop-zone:hover,.drop-zone.active{border-color:#3b82f6;background:#1e3a5f20;color:#60a5fa}
 .img-preview{width:100%;max-height:200px;object-fit:contain;border-radius:8px;margin-top:8px}
 .quick-tickers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
@@ -87,7 +124,7 @@ tr:hover td{background:#0f172a}
 .step{display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;font-size:.85rem}
 .step.done{background:#064e3b20;color:#34d399}
 .step.active{background:#1e3a5f;color:#60a5fa}
-.step.pending{color:#475569}
+.step.pending{color:#8794a8}
 .step-icon{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;flex-shrink:0}
 .step.done .step-icon{background:#064e3b;color:#34d399}
 .step.active .step-icon{background:#1e3a5f;border:2px solid #3b82f6}
@@ -101,9 +138,9 @@ tr:hover td{background:#0f172a}
 .suggestion-item{padding:10px 14px;cursor:pointer;font-size:.9rem;display:flex;justify-content:space-between;align-items:center}
 .suggestion-item:hover{background:#334155}
 .search-wrap{position:relative;flex:1}
-.no-data{text-align:center;padding:40px;color:#64748b}
+.no-data{text-align:center;padding:40px;color:#8794a8}
 .tabs-inner{display:flex;gap:4px;margin-bottom:16px}
-.tab-inner-btn{padding:6px 12px;border:1px solid #334155;border-radius:6px;background:transparent;color:#64748b;cursor:pointer;font-size:.8rem;transition:all .2s}
+.tab-inner-btn{padding:6px 12px;border:1px solid #334155;border-radius:6px;background:transparent;color:#8794a8;cursor:pointer;font-size:.8rem;transition:all .2s}
 .tab-inner-btn.active{background:#334155;color:#e2e8f0}
 </style>
 <!-- ══════════════════════════════════════════════════
@@ -1486,7 +1523,7 @@ function rsi(closes, period=14) {
 
 // ─── SVG Interactive Chart ───────────────────────────────────────────────────
 function buildCandleChart(candles, ticker='', w=960, ch=290, vh=65, rh=58) {
-  if (!candles || candles.length < 2) return '<div style="color:#64748b;padding:20px;text-align:center">데이터 없음</div>';
+  if (!candles || candles.length < 2) return '<div style="color:#8794a8;padding:20px;text-align:center">데이터 없음</div>';
 
   const EXTRA = 10; // 우측 빈 캔들 공간
   const totalSlots = candles.length + EXTRA;
@@ -2399,7 +2436,7 @@ function InfoRow({label, value, color}) {
   if(!value) return null;
   return (
     <div style={{display:'flex',gap:8,padding:'8px 0',borderBottom:'1px solid #1e293b',fontSize:'.85rem'}}>
-      <span style={{color:'#64748b',minWidth:110,flexShrink:0}}>{label}</span>
+      <span style={{color:'#8794a8',minWidth:110,flexShrink:0}}>{label}</span>
       <span style={{color:color||'#e2e8f0',lineHeight:1.5}}>{value}</span>
     </div>
   );
@@ -2457,7 +2494,7 @@ function ComputedTechSection({computed}) {
       {/* Bollinger Bands */}
       {bb && (
         <div style={{marginTop:6,fontSize:'.82rem'}}>
-          <div style={{color:'#64748b',marginBottom:4}}>볼린저밴드 (20,2)</div>
+          <div style={{color:'#8794a8',marginBottom:4}}>볼린저밴드 (20,2)</div>
           <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
             <span>상단 <b style={{color:'#f87171'}}>${fp(bb.upper)}</b></span>
             <span>중간 <b style={{color:'#94a3b8'}}>${fp(bb.mid)}</b></span>
@@ -2474,19 +2511,19 @@ function FibSection({computed, ticker}) {
   if (!computed) return null;
   const {fibs, fibExts, fib90, price, rounds} = computed;
   return (
-    <div style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
-      <div style={{fontSize:'.8rem',fontWeight:700,color:'#a78bfa',marginBottom:10}}>
-        📐 피보나치 레벨 (최근 {computed.swingBars||90}봉 {computed.fibDir==='down'?'하락':'상승'} 스윙: 저 {cs}{fp(fib90?.low)} / 고 {cs}{fp(fib90?.high)})
-      </div>
+    <details style={{background:'#0f172a',border:'1px solid #334155',borderRadius:8,padding:14,marginBottom:12}}>
+      <summary style={{cursor:'pointer',fontSize:'.84rem',fontWeight:700,color:'#a78bfa',userSelect:'none'}}>
+        📐 피보나치 레벨 · 라운드넘버 <span style={{color:'#94a3b8',fontWeight:500}}>(최근 {computed.swingBars||90}봉 {computed.fibDir==='down'?'하락':'상승'} 스윙: 저 {cs}{fp(fib90?.low)} / 고 {cs}{fp(fib90?.high)})</span>
+      </summary>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+      <div className="fib-grid" style={{marginTop:12}}>
         {/* Retracements */}
         <div>
-          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '되돌림 (반등 시 저항)' : '되돌림 (지지)'}</div>
+          <div style={{color:'#8794a8',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '되돌림 (반등 시 저항)' : '되돌림 (지지)'}</div>
           {fibs.map(f => (
-            <div key={f.level} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1e293b20',fontSize:'.8rem'}}>
+            <div key={f.level} className="fib-row">
               <span style={{color:'#94a3b8'}}>Fib {f.level}</span>
-              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>{cs}{fp(f.price)}</span>
+              <span style={{color:'#e2e8f0'}}>{cs}{fp(f.price)}</span>
               <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
             </div>
           ))}
@@ -2494,11 +2531,11 @@ function FibSection({computed, ticker}) {
 
         {/* Extensions */}
         <div>
-          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '확장 (하락 목표)' : '확장 (목표)'}</div>
+          <div style={{color:'#8794a8',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '확장 (하락 목표)' : '확장 (목표)'}</div>
           {fibExts.map(f => (
-            <div key={f.level} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1e293b20',fontSize:'.8rem'}}>
+            <div key={f.level} className="fib-row">
               <span style={{color:'#94a3b8'}}>Ext {f.level}</span>
-              <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>{cs}{fp(f.price)}</span>
+              <span style={{color:'#e2e8f0'}}>{cs}{fp(f.price)}</span>
               <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
             </div>
           ))}
@@ -2508,7 +2545,7 @@ function FibSection({computed, ticker}) {
       {/* Round numbers */}
       {rounds && rounds.length > 0 && (
         <div style={{marginTop:10}}>
-          <div style={{color:'#64748b',fontSize:'.75rem',marginBottom:6}}>심리적 라운드넘버</div>
+          <div style={{color:'#8794a8',fontSize:'.75rem',marginBottom:6}}>심리적 라운드넘버</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
             {rounds.map(r => (
               <span key={r.level} style={{
@@ -2522,7 +2559,7 @@ function FibSection({computed, ticker}) {
           </div>
         </div>
       )}
-    </div>
+    </details>
   );
 }
 
@@ -2537,7 +2574,7 @@ function TradePlanSection({computed, report}) {
   if (stance === 'avoid') return (
     <div style={{background:'#0a0f1a',border:'1px solid #7f1d1d',borderRadius:10,padding:'14px 16px',marginBottom:12,fontSize:'.83rem',color:'#fca5a5',lineHeight:1.7}}>
       ✕ <b>매수 회피 구간</b> — 지표 점수가 −25 이하라 매수 플랜을 제시하지 않습니다.<br/>
-      <span style={{color:'#64748b'}}>숏(공매도) 플랜은 제공하지 않습니다. 과거 검증(코인 10종, 2019~2026)에서 하락 신호의 예측력이 확인되지 않았습니다.</span>
+      <span style={{color:'#8794a8'}}>숏(공매도) 플랜은 제공하지 않습니다. 과거 검증(코인 10종, 2019~2026)에서 하락 신호의 예측력이 확인되지 않았습니다.</span>
     </div>
   );
   const distPct = v => (v/price - 1) * 100;
@@ -2552,7 +2589,7 @@ function TradePlanSection({computed, report}) {
     {label: '손절',     val:plan.stopLoss,              color:'#f87171', kind:'sl'},
   ].filter(r => r.val != null);
 
-  const th = {padding:'9px 12px',textAlign:'right',fontSize:'.68rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',whiteSpace:'nowrap'};
+  const th = {padding:'9px 12px',textAlign:'right',fontSize:'.74rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em',whiteSpace:'nowrap'};
   const dirColor = isLong ? '#4ade80' : '#f87171';
 
   return (
@@ -2563,13 +2600,13 @@ function TradePlanSection({computed, report}) {
         {stance==='bear' && <span style={{fontSize:'.74rem',color:'#fb923c'}}>⚠ BTC가 200일선 아래 — 과거 하락장(2022)에서 롱 신호는 손실이었습니다. 진입 비권장</span>}
       </div>
       <div style={{overflowX:'auto'}}>
-      <table style={{width:'100%',borderCollapse:'collapse',minWidth:420}}>
+      <table className="plan-table" style={{width:'100%',borderCollapse:'collapse',minWidth:420}}>
         <thead>
           <tr style={{borderBottom:'1px solid #1e293b'}}>
             <th style={{...th,textAlign:'left'}}>레벨</th>
             <th style={th}>가격</th>
-            <th style={th}>현재가 대비</th>
-            <th style={th}>R:R</th>
+            <th className="col-sub" style={th}>현재가 대비</th>
+            <th className="col-sub" style={th}>R:R</th>
             <th style={th}>예상 손익</th>
           </tr>
         </thead>
@@ -2579,11 +2616,12 @@ function TradePlanSection({computed, report}) {
             const ret = r.kind==='entry' ? null : retPct(r.val);
             return (
               <tr key={i} style={{borderBottom:'1px solid #0f172a',background:i%2===0?'#0a0f1a':'#0d1424'}}>
-                <td style={{padding:'10px 12px',color:r.color,fontWeight:700,fontSize:'.85rem',whiteSpace:'nowrap'}}>{r.label}</td>
+                <td style={{padding:'10px 12px',color:r.color,fontWeight:700,fontSize:'.85rem',whiteSpace:'nowrap'}}>{r.label}
+                  <div className="mob-only">현재가 대비 {`${d>=0?'+':''}${d.toFixed(2)}%`}{r.rr!=null ? ` · R:R ${r.rr.toFixed(2)}` : ''}</div></td>
                 <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',fontWeight:700,color:'#e2e8f0',fontSize:'.9rem'}}>{fmtPx(r.val,ticker)}</td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontSize:'.8rem',color:'#64748b'}}>{`${d>=0?'+':''}${d.toFixed(2)}%`}</td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontSize:'.82rem',color:'#94a3b8'}}>{r.rr!=null ? r.rr.toFixed(2) : '—'}</td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontSize:'.88rem',color:ret==null?'#64748b':ret>=0?'#4ade80':'#f87171'}}>
+                <td className="col-sub" style={{padding:'10px 12px',textAlign:'right',fontSize:'.8rem',color:'#8794a8'}}>{`${d>=0?'+':''}${d.toFixed(2)}%`}</td>
+                <td className="col-sub" style={{padding:'10px 12px',textAlign:'right',fontSize:'.82rem',color:'#94a3b8'}}>{r.rr!=null ? r.rr.toFixed(2) : '—'}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontSize:'.88rem',color:ret==null?'#8794a8':ret>=0?'#4ade80':'#f87171'}}>
                   {ret==null ? '—' : `${ret>=0?'+':''}${ret.toFixed(2)}%`}
                 </td>
               </tr>
@@ -2592,7 +2630,7 @@ function TradePlanSection({computed, report}) {
         </tbody>
       </table>
       </div>
-      <div style={{padding:'8px 12px',background:'#080d18',borderTop:'1px solid #1e293b',display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:6,fontSize:'.74rem',color:'#475569'}}>
+      <div style={{padding:'8px 12px',background:'#080d18',borderTop:'1px solid #1e293b',display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:6,fontSize:'.74rem',color:'#8794a8'}}>
         <span>리스크(진입~손절) {plan.riskPct.toFixed(2)}% · ATR(14) {fmtPx(plan.atr,ticker)} · 손절은 ATR·스윙 중 가까운 쪽</span>
         <span>설정 유형: <span style={{color:'#60a5fa',fontWeight:700}}>{report?.setup_type||'스윙 트레이드'}</span></span>
       </div>
@@ -2631,7 +2669,7 @@ function ReportHero({report, aiPending}) {
           </div>
           <div>
             <div style={{fontSize:'1.75rem',fontWeight:900,color:'#f8fafc',lineHeight:1,letterSpacing:'-0.02em'}}>{ticker}</div>
-            <div style={{fontSize:'.82rem',color:'#64748b',marginTop:2}}>
+            <div style={{fontSize:'.82rem',color:'#8794a8',marginTop:2}}>
               {report._noData?'AI 텍스트 분석':'기술적 분석 리포트'}{report.tfLabel ? ` · ${report.tfLabel} 기준` : ''}
             </div>
             <div style={{marginTop:5}}>
@@ -2645,7 +2683,7 @@ function ReportHero({report, aiPending}) {
           <div style={{background:st.bg,border:`1.5px solid ${st.border}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}
                title="판정은 AI가 아니라 지표 점수(롱 ≥ +25, 매수 회피 ≤ −25)와 BTC 200일선 필터로 결정됩니다">
             <div style={{fontSize:'1.15rem',fontWeight:900,color:st.color,letterSpacing:'0.04em'}}>{st.icon} {st.label}</div>
-            <div style={{fontSize:'.7rem',color:st.color+'99',marginTop:2}}>
+            <div style={{fontSize:'.74rem',color:st.color+'99',marginTop:2}}>
               {st.sub}{report.score!=null ? ` · 점수 ${report.score>0?'+':''}${report.score}` : ''}
             </div>
           </div>
@@ -2657,7 +2695,7 @@ function ReportHero({report, aiPending}) {
             </svg>
             <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
               <span style={{fontSize:'1.05rem',fontWeight:800,color:'#f8fafc',lineHeight:1}}>{stats ? `${Math.round(stats.up)}%` : '—'}</span>
-              <span style={{fontSize:'.56rem',color:'#64748b',marginTop:2,textAlign:'center',lineHeight:1.15}}>{stats ? <>과거 20일<br/>상승 비율</> : <>검증<br/>데이터 없음</>}</span>
+              <span style={{fontSize:'.66rem',color:'#8794a8',marginTop:2,textAlign:'center',lineHeight:1.15}}>{stats ? <>과거 20일<br/>상승 비율</> : <>검증<br/>데이터 없음</>}</span>
             </div>
           </div>
           {report.risk_level && (
@@ -2667,9 +2705,24 @@ function ReportHero({report, aiPending}) {
           )}
         </div>
       </div>
+      {report.computed?.tradePlan && (() => {
+        const p = report.computed.tradePlan, sk = stanceOf(report), px = v => fmtPx(v, report.ticker);
+        const text = sk==='long'
+          ? <>진입 <b>{px(p.entry1)}</b>{p.entryMode==='market'?' (현재가 부근)':' (지정가)'} · 손절 <b style={{color:'#fb923c'}}>{px(p.stopLoss)}</b> · 1차 목표 <b style={{color:'#a78bfa'}}>{px(p.profit1)}</b> <span style={{color:'#94a3b8'}}>(R:R {p.rr1?.toFixed(1)})</span></>
+          : sk==='neutral' ? <>신규 진입 보류 — 점수가 ±25 안쪽(관망)입니다. 보유 중이면 손절선 <b style={{color:'#fb923c'}}>{px(p.stopLoss)}</b> 관리</>
+          : sk==='avoid'   ? <>신규 매수 보류 — 하락 우위 구간입니다. 보유 중이면 비중 축소를 검토하세요</>
+          :                  <>신규 롱 보류 — BTC가 200일선 아래입니다 (과거 하락장에서 롱 신호는 손실)</>;
+        const ai = !report._local && report.summary ? (report.summary.split(/(?<=[.!?。]|다\.)\s+/)[0] || '').slice(0, 160) : '';
+        return (
+          <div className="action-box">
+            <div><span className="k">지금 할 일</span>{text}</div>
+            {ai && <div style={{marginTop:6,color:'#cbd5e1',fontSize:'.86rem'}}><span className="k">AI 요약</span>{ai}</div>}
+          </div>
+        );
+      })()}
       {(stats || report.regime) && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:'6px 16px',fontSize:'.76rem',color:'#64748b',marginBottom:12,padding:'8px 12px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8}}>
-          {stats && <span>📊 과거 실측 ({EMPIRICAL_CRYPTO_1D.period}, n={stats.n}): 20일 후 평균 <b style={{color:stats.avg>=0?'#4ade80':'#f87171'}}>{stats.avg>=0?'+':''}{stats.avg}%</b> · 중앙값 <b style={{color:stats.med>=0?'#4ade80':'#f87171'}}>{stats.med>=0?'+':''}{stats.med}%</b> <span style={{color:'#475569'}}>(전체 평균 +{EMPIRICAL_CRYPTO_1D.all.avg}% · 상승 {EMPIRICAL_CRYPTO_1D.all.up}%)</span></span>}
+        <div style={{display:'flex',flexWrap:'wrap',gap:'6px 16px',fontSize:'.76rem',color:'#8794a8',marginBottom:12,padding:'8px 12px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8}}>
+          {stats && <span>📊 과거 실측 ({EMPIRICAL_CRYPTO_1D.period}, n={stats.n}): 20일 후 평균 <b style={{color:stats.avg>=0?'#4ade80':'#f87171'}}>{stats.avg>=0?'+':''}{stats.avg}%</b> · 중앙값 <b style={{color:stats.med>=0?'#4ade80':'#f87171'}}>{stats.med>=0?'+':''}{stats.med}%</b> <span style={{color:'#8794a8'}}>(전체 평균 +{EMPIRICAL_CRYPTO_1D.all.avg}% · 상승 {EMPIRICAL_CRYPTO_1D.all.up}%)</span></span>}
           {report.regime && (report.regime.unknown
             ? <span>₿ BTC 국면 확인 실패 — 하락장 필터 미적용</span>
             : <span>₿ BTC {report.regime.btcAbove ? <b style={{color:'#4ade80'}}>200일선 위</b> : <b style={{color:'#fb923c'}}>200일선 아래 (하락장 필터 작동)</b>} · {fmtPx(report.regime.btcPrice,'BTC')} / MA200 {fmtPx(report.regime.btcMa200,'BTC')}</span>)}
@@ -2677,7 +2730,7 @@ function ReportHero({report, aiPending}) {
       )}
       {report.signals?.length>0 && (
         <div>
-          <div style={{fontSize:'.7rem',fontWeight:700,color:'#334155',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS (지표 기반)</div>
+          <div style={{fontSize:'.76rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS (지표 기반)</div>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
             {report.signals.map((s,i)=>{
               const c = palette[report.signalsTone?.[i]] || palette.neu;
@@ -2687,7 +2740,7 @@ function ReportHero({report, aiPending}) {
         </div>
       )}
       {aiPending && (
-        <div style={{display:'flex',alignItems:'center',gap:8,marginTop:12,fontSize:'.8rem',color:'#64748b'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginTop:12,fontSize:'.8rem',color:'#8794a8'}}>
           <div className="spinner" style={{width:14,height:14,borderWidth:2}}/>
           AI 해설 생성 중... (판정·점수·매매 플랜은 지표 계산으로 이미 확정)
         </div>
@@ -2714,16 +2767,16 @@ function AnalysisSection({report}) {
     const n=Number(val), pct=curPrice?((n-curPrice)/curPrice*100):null;
     const dc=pct==null?'#64748b':pct>=0?'#4ade80':'#f87171';
     return (
-      <div style={{flex:'1 1 90px',minWidth:86,background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 10px',textAlign:'center'}}>
-        <div style={{fontSize:'.7rem',color:'#475569',fontWeight:600,marginBottom:4}}>{icon} {label}</div>
-        <div style={{fontSize:'1rem',fontWeight:800,color,fontFamily:'monospace'}}>{fmtPx(val,ticker)}</div>
-        {pct!=null && <div style={{fontSize:'.72rem',fontWeight:700,color:dc,marginTop:3}}>{pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`}</div>}
+      <div style={{minWidth:0,background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 8px',textAlign:'center'}}>
+        <div style={{fontSize:'.74rem',color:'#8794a8',fontWeight:600,marginBottom:4}}>{icon} {label}</div>
+        <div style={{fontSize:'.98rem',fontWeight:800,color,fontFamily:'monospace',overflowWrap:'anywhere'}}>{fmtPx(val,ticker)}</div>
+        {pct!=null && <div style={{fontSize:'.76rem',fontWeight:700,color:dc,marginTop:3}}>{pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`}</div>}
       </div>
     );
   };
   const MetricRow = ({label, value, valueColor}) => (
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #0f172a',fontSize:'.82rem'}}>
-      <span style={{color:'#64748b'}}>{label}</span>
+      <span style={{color:'#8794a8'}}>{label}</span>
       <span style={{color:valueColor||'#e2e8f0',fontWeight:700,textAlign:'right'}}>{value}</span>
     </div>
   );
@@ -2740,7 +2793,7 @@ function AnalysisSection({report}) {
   return (
     <div className="card">
       <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>📊 기술적 분석</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+        <span>📊 기술적 분석</span><span style={{fontSize:'.9rem',color:'#8794a8'}}>{open?'▲':'▼'}</span>
       </div>
       {open && <>
 
@@ -2748,22 +2801,22 @@ function AnalysisSection({report}) {
       {report.scoreBreakdown && (
         <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 14px',marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:6}}>
-            <span style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>🧮 지표 점수 분해</span>
-            <span style={{fontSize:'.78rem',color:'#64748b'}}>
+            <span style={{fontSize:'.75rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em'}}>🧮 지표 점수 분해</span>
+            <span style={{fontSize:'.78rem',color:'#8794a8'}}>
               합계 <b style={{color:report.score>=25?'#4ade80':report.score<=-25?'#f87171':'#fbbf24',fontSize:'.95rem'}}>{report.score>0?'+':''}{report.score}</b> / ±100 · 롱 ≥ +25 · 매수 회피 ≤ −25
             </span>
           </div>
           {report.scoreBreakdown.map(c=>(
-            <div key={c.key} style={{display:'grid',gridTemplateColumns:'minmax(90px,1.1fr) minmax(80px,1.4fr) minmax(0,2.2fr)',gap:10,alignItems:'center',padding:'4px 0',fontSize:'.78rem'}}>
-              <span style={{color:'#94a3b8'}}>{c.label} <span style={{color:'#334155'}}>({c.weight})</span></span>
-              <div style={{position:'relative',height:8,background:'#111827',borderRadius:4}}>
+            <div key={c.key} className="score-row">
+              <span style={{color:'#94a3b8'}}>{c.label} <span style={{color:'#8794a8'}}>({c.weight})</span></span>
+              <div className="bar" style={{position:'relative',height:8,background:'#111827',borderRadius:4}}>
                 <div style={{position:'absolute',left:'50%',top:-2,bottom:-2,width:1,background:'#334155'}}/>
                 <div style={{position:'absolute',top:0,bottom:0,borderRadius:4,
                   left: c.value>=0 ? '50%' : `${50 + c.value*50}%`,
                   width: `${Math.abs(c.value)*50}%`,
                   background: c.value>=0 ? '#22c55e' : '#ef4444'}}/>
               </div>
-              <span style={{color:'#64748b'}}>
+              <span className="note" style={{color:'#94a3b8'}}>
                 <b style={{color:c.contrib>0?'#4ade80':c.contrib<0?'#f87171':'#94a3b8'}}>{c.contrib>0?'+':''}{c.contrib.toFixed(1)}</b> · {c.note}
               </span>
             </div>
@@ -2773,12 +2826,12 @@ function AnalysisSection({report}) {
 
       {/* 매매 플랜 */}
       <div style={{marginBottom:16}}>
-        <div style={{fontSize:'.75rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반 · 롱 전용)</div>
+        <div style={{fontSize:'.75rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반 · 롱 전용)</div>
         <TradePlanSection computed={computed} report={report}/>
       </div>
 
       {/* 핵심 가격대 */}
-      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+      <div className="price-tags">
         <PriceTag val={report.support}      label="가까운 지지"  color="#4ade80" icon="🟢"/>
         <PriceTag val={report.resistance}   label="가까운 저항"  color="#f87171" icon="🔴"/>
         <PriceTag val={report.target_price} label="1차 목표"     color="#a78bfa" icon="🎯"/>
@@ -2788,13 +2841,13 @@ function AnalysisSection({report}) {
       {/* 기술 지표 좌우 분할 */}
       {computed && (
         <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
-          <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>기술 지표</div>
+          <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em'}}>기술 지표</div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:0}}>
             <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
               <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
                 <div style={{fontSize:'1.4rem',lineHeight:1}}>📈</div>
                 <div style={{minWidth:0}}>
-                  <div style={{fontSize:'.72rem',fontWeight:700,color:'#60a5fa',letterSpacing:'0.08em',marginBottom:6}}>요약</div>
+                  <div style={{fontSize:'.76rem',fontWeight:700,color:'#60a5fa',letterSpacing:'0.08em',marginBottom:6}}>요약</div>
                   {tech ? (
                     <>
                       <div style={{fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7}}>
@@ -2807,10 +2860,10 @@ function AnalysisSection({report}) {
                       )}
                     </>
                   ) : (
-                    <div style={{fontSize:'.8rem',color:'#475569'}}>AI 해설 대기 중 — 아래는 지표에서 직접 계산한 사실입니다.</div>
+                    <div style={{fontSize:'.8rem',color:'#8794a8'}}>AI 해설 대기 중 — 아래는 지표에서 직접 계산한 사실입니다.</div>
                   )}
                   {facts.length>0 && (
-                    <ul style={{margin:'10px 0 0',paddingLeft:16,fontSize:'.78rem',color:'#64748b',lineHeight:1.7}}>
+                    <ul style={{margin:'10px 0 0',paddingLeft:16,fontSize:'.78rem',color:'#8794a8',lineHeight:1.7}}>
                       {facts.map((f,i)=><li key={i}>{f}</li>)}
                     </ul>
                   )}
@@ -2871,19 +2924,19 @@ function PositionAdvisor({report}) {
   const tipIcon  = {danger:'⛔', warn:'⚠️', info:'💡', ok:'✅'};
   const seg = (on) => ({padding:'5px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',cursor:'pointer',fontSize:'.8rem',fontWeight:600});
   const inp = {width:'100%',padding:'7px 10px',background:'#0f172a',border:'1px solid #334155',borderRadius:6,color:'#e2e8f0',fontSize:'.85rem'};
-  const lab = {fontSize:'.72rem',color:'#64748b',marginBottom:4,display:'block'};
+  const lab = {fontSize:'.76rem',color:'#8794a8',marginBottom:4,display:'block'};
   const Box = ({label, value, color, sub}) => (
     <div style={{flex:'1 1 140px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
-      <div style={{fontSize:'.7rem',color:'#64748b',marginBottom:3}}>{label}</div>
+      <div style={{fontSize:'.74rem',color:'#8794a8',marginBottom:3}}>{label}</div>
       <div style={{fontSize:'.98rem',fontWeight:800,color:color||'#e2e8f0',fontFamily:'monospace'}}>{value}</div>
-      {sub && <div style={{fontSize:'.7rem',color:'#475569',marginTop:2}}>{sub}</div>}
+      {sub && <div style={{fontSize:'.74rem',color:'#8794a8',marginTop:2}}>{sub}</div>}
     </div>
   );
 
   return (
     <div className="card">
       <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>🧭 내 포지션 전략</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+        <span>🧭 내 포지션 전략</span><span style={{fontSize:'.9rem',color:'#8794a8'}}>{open?'▲':'▼'}</span>
       </div>
       {open && <>
       <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end',marginBottom:14}}>
@@ -2923,7 +2976,7 @@ function PositionAdvisor({report}) {
       </div>
 
       {!adv ? (
-        <div style={{fontSize:'.83rem',color:'#64748b',padding:'6px 0 4px'}}>평균 단가와 비중을 입력하면 손익·손절 시 계좌 손실{isCrypto?'·청산가':''}와 전략을 계산합니다. 입력값은 이 브라우저에 종목별로 저장됩니다.</div>
+        <div style={{fontSize:'.83rem',color:'#8794a8',padding:'6px 0 4px'}}>평균 단가와 비중을 입력하면 손익·손절 시 계좌 손실{isCrypto?'·청산가':''}와 전략을 계산합니다. 입력값은 이 브라우저에 종목별로 저장됩니다.</div>
       ) : <>
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12,padding:'10px 14px',borderRadius:8,
           background: adv.sev==='danger'?'#450a0a':adv.sev==='warn'?'#451a03':'#052e16',
@@ -2950,7 +3003,7 @@ function PositionAdvisor({report}) {
             </div>
           ))}
         </div>
-        <div style={{fontSize:'.72rem',color:'#475569',marginTop:10,lineHeight:1.6}}>
+        <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:10,lineHeight:1.6}}>
           {adv.futures && `청산가는 격리 마진·유지증거금률 ${adv.mmr}% 가정 근사치이며 수수료·펀딩비를 제외합니다. 교차 마진은 계좌 잔고에 따라 달라지므로 거래소 화면의 청산가를 우선하세요. `}
           보호 손절선은 가까운 지지·저항과 ATR로 계산한 참고값입니다. 판정별 과거 성과는 위 실측 통계를 참고하세요. 투자 권유가 아닙니다.
         </div>
@@ -2967,14 +3020,14 @@ function ConclusionSection({report}) {
   const stats = report.stats;
   const OpinionRow = ({label, value, valueColor}) => (
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #0f172a',fontSize:'.83rem'}}>
-      <span style={{color:'#64748b'}}>{label}</span>
+      <span style={{color:'#8794a8'}}>{label}</span>
       <span style={{color:valueColor||'#e2e8f0',fontWeight:700,textAlign:'right'}}>{value}</span>
     </div>
   );
   return (
     <div className="card">
       <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>💡 AI 해설 · 투자 의견</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+        <span>💡 AI 해설 · 투자 의견</span><span style={{fontSize:'.9rem',color:'#8794a8'}}>{open?'▲':'▼'}</span>
       </div>
       {open && <>
       {report.summary && (
@@ -2983,13 +3036,13 @@ function ConclusionSection({report}) {
         </div>
       )}
       <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
-        <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#475569',letterSpacing:'0.08em'}}>투자 의견</div>
+        <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em'}}>투자 의견</div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:0}}>
           <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
             <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
               <div style={{fontSize:'1.4rem',lineHeight:1}}>🎯</div>
               <div>
-                <div style={{fontSize:'.72rem',fontWeight:700,color:'#a78bfa',letterSpacing:'0.08em',marginBottom:6}}>종합 의견</div>
+                <div style={{fontSize:'.76rem',fontWeight:700,color:'#a78bfa',letterSpacing:'0.08em',marginBottom:6}}>종합 의견</div>
                 <div style={{fontSize:'.83rem',color:'#94a3b8',lineHeight:1.7}}>
                   {report.recommendation || report.summary || '분석 데이터 없음'}
                 </div>
@@ -3005,7 +3058,7 @@ function ConclusionSection({report}) {
         </div>
       </div>
       <details style={{marginTop:4}}>
-        <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem',marginBottom:8,userSelect:'none'}}>상세 해설 항목 펼치기</summary>
+        <summary style={{cursor:'pointer',color:'#8794a8',fontSize:'.8rem',marginBottom:8,userSelect:'none'}}>상세 해설 항목 펼치기</summary>
         <div style={{marginTop:8}}>
           <InfoRow label="📈 추세"       value={report.trend}/>
           <InfoRow label="📊 이동평균선"  value={report.ma_status}/>
@@ -3018,7 +3071,7 @@ function ConclusionSection({report}) {
       </details>
       {report.visionText && (
         <details style={{marginTop:8}}>
-          <summary style={{cursor:'pointer',color:'#475569',fontSize:'.8rem'}}>AI 차트 분석 원문 보기</summary>
+          <summary style={{cursor:'pointer',color:'#8794a8',fontSize:'.8rem'}}>AI 차트 분석 원문 보기</summary>
           <div style={{background:'#0f172a',border:'1px solid #1e293b',borderRadius:8,padding:14,marginTop:8,fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7,whiteSpace:'pre-wrap'}}>{report.visionText}</div>
         </details>
       )}
@@ -3223,11 +3276,11 @@ function InteractiveChart({query, mode, resolvedTicker, initialTf, analysisTf, o
                   cursor: disabled ? 'not-allowed' : 'pointer',
                   opacity: disabled ? 0.3 : 1,
                   background:tf===t.id?'linear-gradient(135deg,#3b82f6,#6366f1)':'#1e293b',
-                  color:tf===t.id?'#fff':'#64748b',
+                  color:tf===t.id?'#fff':'#8794a8',
                 }}>{t.label}</button>
             );
           })}
-          {isKrStock && <span style={{fontSize:'.72rem',color:'#475569',marginLeft:4}}>일/주/월봉만 지원</span>}
+          {isKrStock && <span style={{fontSize:'.76rem',color:'#8794a8',marginLeft:4}}>일/주/월봉만 지원</span>}
         </div>
       </div>
       {onAnalyzeTf && analysisTf && tf!==analysisTf && !loading && !error && (
@@ -3241,12 +3294,12 @@ function InteractiveChart({query, mode, resolvedTicker, initialTf, analysisTf, o
       {loading && (
         <div style={{textAlign:'center',padding:'24px 0'}}>
           <div className="spinner" style={{margin:'0 auto'}}/>
-          <div style={{color:'#64748b',fontSize:'.8rem',marginTop:8}}>차트 데이터 로딩중...</div>
+          <div style={{color:'#8794a8',fontSize:'.8rem',marginTop:8}}>차트 데이터 로딩중...</div>
         </div>
       )}
       {error && <div className="alert-box alert-err" style={{fontSize:'.82rem'}}>{error}</div>}
       {!loading && !error && ohlcv && (
-        <div style={{fontSize:'.72rem',color:'#475569',marginBottom:4,textAlign:'right'}}>
+        <div style={{fontSize:'.76rem',color:'#8794a8',marginBottom:4,textAlign:'right'}}>
           {ohlcv.length}개 캔들 · {ohlcv[0]?.date?.slice(0,10)} ~ {ohlcv[ohlcv.length-1]?.date?.slice(0,10)}
         </div>
       )}
@@ -3275,13 +3328,13 @@ function ModeSelector({mode, onChange}) {
                 : m.id==='crypto' ? 'linear-gradient(135deg,#f59e0b,#d97706)'
                 : 'linear-gradient(135deg,#6366f1,#4f46e5)')
               : '#0f172a',
-            color: mode===m.id ? '#fff' : '#64748b',
+            color: mode===m.id ? '#fff' : '#8794a8',
             cursor:'pointer', transition:'all .15s',
           }}>
           {m.label}
         </button>
       ))}
-      <span style={{fontSize:'.75rem',color:'#475569',alignSelf:'center',marginLeft:4}}>
+      <span style={{fontSize:'.75rem',color:'#8794a8',alignSelf:'center',marginLeft:4}}>
         {mode==='stock'?'Yahoo Finance 검색':mode==='crypto'?'CoinGecko 검색':'자동 감지'}
       </span>
     </div>
@@ -3300,6 +3353,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [aiLoading, setAiLoading] = useState(false);
   const [analysisTf, setAnalysisTf] = useState('1d');
   const [lastTarget, setLastTarget] = useState('');
+  const [chartTab, setChartTab] = useState('mine');
   const [imgB64, setImgB64] = useState(null);
   const [imgType, setImgType] = useState(null);
   const [logs, setLogs]     = useState(()=>ls_get('cs_logs',[]));
@@ -3434,17 +3488,18 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
           <button className="btn-primary" onClick={()=>handleAnalyze()} disabled={loading||!query.trim()}>분석</button>
         </div>
 
-        {/* 이미지 업로드 영역 (항상 노출) */}
-        <div style={{borderTop:'1px solid #334155',paddingTop:16,marginTop:4}}>
-          <div style={{fontSize:'.85rem',color:'#94a3b8',marginBottom:8}}>📷 차트 이미지 직접 분석</div>
-          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="종목명 (선택 입력)" style={{marginBottom:8}}/>
-          <ImageDropzone onImage={(b64,type)=>{setImgB64(b64);setImgType(type);}}/>
-          {imgB64 && (
-            <button className="btn-primary" style={{marginTop:10,width:'100%'}} onClick={handleImageAnalyze} disabled={loading}>
-              이미지 분석 실행
-            </button>
-          )}
-        </div>
+        {/* 이미지 업로드 (선택, 기본 접힘) */}
+        <details style={{borderTop:'1px solid #334155',paddingTop:12,marginTop:4}}>
+          <summary style={{cursor:'pointer',fontSize:'.86rem',color:'#94a3b8',userSelect:'none'}}>📷 차트 이미지로 분석 (선택)</summary>
+          <div style={{marginTop:10}}>
+            <ImageDropzone onImage={(b64,type)=>{setImgB64(b64);setImgType(type);}}/>
+            {imgB64 && (
+              <button className="btn-primary" style={{marginTop:10,width:'100%'}} onClick={handleImageAnalyze} disabled={loading}>
+                이미지 분석 실행 {query ? `(${query})` : ''}
+              </button>
+            )}
+          </div>
+        </details>
 
         {error && <div className="alert-box alert-err" style={{marginTop:12}}>{error}</div>}
       </div>
@@ -3463,7 +3518,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
           </div>
           <div className="card" style={{height:200,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12}}>
             <div className="spinner"/>
-            <div style={{color:'#475569',fontSize:'.85rem'}}>
+            <div style={{color:'#8794a8',fontSize:'.85rem'}}>
               {step==='ticker'?'🔍 종목 확인 중...':step==='data'?'📊 차트 데이터 수집 중...':'데이터 로딩 중...'}
             </div>
           </div>
@@ -3472,36 +3527,51 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
 
       {shown && !loading && (
         <>
-          <ReportHero report={shown} aiPending={aiLoading}/>
+          <nav className="sec-nav">
+            {[['sec-summary','요약'],['sec-chart','차트'],['sec-tech','기술 분석'],['sec-pos','내 포지션'],['sec-ai','AI 해설']].map(([id,l])=>(
+              <a key={id} href={'#'+id} onClick={e=>{e.preventDefault();document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});}}>{l}</a>
+            ))}
+          </nav>
 
-          <InteractiveChart query={lastTarget||query||phase1?.ticker||report?.ticker} mode={mode}
-            resolvedTicker={phase1?.ticker||report?.ticker}
-            initialTf={analysisTf} analysisTf={analysisTf}
-            onAnalyzeTf={(t)=>handleAnalyze(lastTarget||query, mode, t)}/>
+          <div id="sec-summary"><ReportHero report={shown} aiPending={aiLoading}/></div>
 
-          {(phase1?.ticker||report?.ticker) && (
-            <div className="card" style={{padding:'12px 16px'}}>
-              <div className="card-title" style={{marginBottom:8}}>📺 TradingView</div>
-              <TradingViewWidget ticker={phase1?.ticker||report?.ticker} query={report?._query||lastTarget||query}/>
+          <div id="sec-chart">
+            <div className="seg-tabs">
+              <button className={chartTab==='mine'?'on':''} onClick={()=>setChartTab('mine')}>📊 인터랙티브 차트</button>
+              <button className={chartTab==='tv'?'on':''} onClick={()=>setChartTab('tv')}>📺 TradingView</button>
             </div>
-          )}
+            <div style={{display: chartTab==='mine' ? 'block' : 'none'}}>
+              <InteractiveChart query={lastTarget||query||phase1?.ticker||report?.ticker} mode={mode}
+                resolvedTicker={phase1?.ticker||report?.ticker}
+                initialTf={analysisTf} analysisTf={analysisTf}
+                onAnalyzeTf={(t)=>handleAnalyze(lastTarget||query, mode, t)}/>
+            </div>
+            {chartTab==='tv' && (phase1?.ticker||report?.ticker) && (
+              <div className="card" style={{padding:'12px 16px'}}>
+                <TradingViewWidget ticker={phase1?.ticker||report?.ticker} query={report?._query||lastTarget||query}/>
+              </div>
+            )}
+          </div>
 
-          <AnalysisSection report={shown}/>
+          <div id="sec-tech"><AnalysisSection report={shown}/></div>
 
-          <PositionAdvisor key={shown.ticker} report={shown}/>
+          <div id="sec-pos"><PositionAdvisor key={shown.ticker} report={shown}/></div>
+
+          <div id="sec-ai">
 
           {aiLoading && (
             <div className="card">
               <div className="card-title">💡 AI 해설</div>
-              <div style={{display:'flex',alignItems:'center',gap:12,padding:'16px 0',color:'#475569',fontSize:'.88rem'}}>
+              <div style={{display:'flex',alignItems:'center',gap:12,padding:'16px 0',color:'#8794a8',fontSize:'.88rem'}}>
                 <div className="spinner"/>
                 <span>🤖 지표 계산 결과를 바탕으로 AI 해설을 작성 중... (5~15초)</span>
               </div>
             </div>
           )}
           {!aiLoading && report && <ConclusionSection report={report}/>}
+          </div>
 
-          <div style={{fontSize:'.74rem',color:'#475569',lineHeight:1.6,padding:'4px 6px 12px'}}>
+          <div style={{fontSize:'.74rem',color:'#8794a8',lineHeight:1.6,padding:'4px 6px 12px'}}>
             ⚠️ 본 분석은 과거 가격 데이터의 지표 계산과 AI 해설에 기반한 참고용 정보이며 투자 권유가 아닙니다. 매매 판단과 손익의 책임은 투자자 본인에게 있습니다.
           </div>
         </>
@@ -3519,7 +3589,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
               <tbody>
                 {[...logs].reverse().slice(0,50).map((l,i)=>(
                   <tr key={i}>
-                    <td style={{fontSize:'.75rem',color:'#64748b'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
+                    <td style={{fontSize:'.75rem',color:'#8794a8'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
                     <td style={{fontWeight:700}}>{l.ticker}</td>
                     <td><span className={`badge ${l.position==='long'?'badge-green':l.position==='short'?'badge-red':'badge-yellow'}`}>{l.position}</span></td>
                     <td>{l.confidence!=null ? `${l.confidence}%` : '—'}</td>
@@ -3586,7 +3656,7 @@ function CompareTab({apiKey, serverHasKey}) {
       </div>
 
       {loading && (
-        <div className="card"><div className="loader"><div className="spinner"/><p style={{color:'#64748b',marginTop:12}}>{tickers.length}개 종목 분석 중...</p></div></div>
+        <div className="card"><div className="loader"><div className="spinner"/><p style={{color:'#8794a8',marginTop:12}}>{tickers.length}개 종목 분석 중...</p></div></div>
       )}
 
       {results.length>0 && (
@@ -3686,7 +3756,7 @@ function PerformanceTab({apiKey, serverHasKey}) {
               <tbody>
                 {[...logs].reverse().slice(0,20).map((l,i)=>(
                   <tr key={i}>
-                    <td style={{fontSize:'.75rem',color:'#64748b'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
+                    <td style={{fontSize:'.75rem',color:'#8794a8'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
                     <td style={{fontWeight:700}}>{l.ticker}</td>
                     <td><span className={`badge ${l.position==='long'?'badge-green':l.position==='short'?'badge-red':'badge-yellow'}`}>{l.position}</span></td>
                     <td>{l.confidence!=null ? `${l.confidence}%` : '—'}</td>
@@ -3792,7 +3862,7 @@ function BacktestTab() {
         {error && <div className="alert-box alert-err">{error}</div>}
       </div>
 
-      {loading && <div className="card"><div className="loader"><div className="spinner"/><p style={{color:'#64748b',marginTop:12}}>데이터 수집 및 백테스트 실행 중...</p></div></div>}
+      {loading && <div className="card"><div className="loader"><div className="spinner"/><p style={{color:'#8794a8',marginTop:12}}>데이터 수집 및 백테스트 실행 중...</p></div></div>}
 
       {result && !loading && (
         <>
@@ -3904,7 +3974,7 @@ function PortfolioTab() {
 
         {tab==='holdings' && (
           <>
-            {loading && <div style={{textAlign:'center',padding:20,color:'#64748b'}}>가격 업데이트 중...</div>}
+            {loading && <div style={{textAlign:'center',padding:20,color:'#8794a8'}}>가격 업데이트 중...</div>}
             {portfolio.length===0 ? (
               <div className="no-data">포트폴리오가 비어있습니다.<br/>종목 추가 탭에서 추가해보세요.</div>
             ) : (
@@ -3979,7 +4049,7 @@ function PortfolioTab() {
                     ))}
                   </tbody>
                 </table>
-                <p style={{fontSize:'.75rem',color:'#64748b',marginTop:8}}>
+                <p style={{fontSize:'.75rem',color:'#8794a8',marginTop:8}}>
                   녹색: 양의 상관관계 / 적색: 음의 상관관계 / 백색: 무상관
                 </p>
               </div>
@@ -4070,7 +4140,7 @@ function MonitorTab({apiKey, settings, serverHasKey}) {
         <div className="card-title" style={{justifyContent:'space-between'}}>
           <span>👁 모니터링</span>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            <span style={{fontSize:'.8rem',color:running?'#34d399':'#64748b'}}>
+            <span style={{fontSize:'.8rem',color:running?'#34d399':'#8794a8'}}>
               {running?`🟢 모니터링 중 (${settings.monitorInterval}초 간격)`:'⚪ 중지됨'}
             </span>
             {running
@@ -4095,7 +4165,7 @@ function MonitorTab({apiKey, settings, serverHasKey}) {
               <div style={{display:'flex',align:'center',gap:12}}>
                 <span style={{fontWeight:700,color:'#60a5fa'}}>{t}</span>
                 {prices[t] && <span style={{color:'#e2e8f0'}}>${prices[t].toLocaleString(undefined,{maximumFractionDigits:4})}</span>}
-                {!prices[t] && <span style={{color:'#64748b',fontSize:'.8rem'}}>가격 대기중...</span>}
+                {!prices[t] && <span style={{color:'#8794a8',fontSize:'.8rem'}}>가격 대기중...</span>}
               </div>
               <button className="btn-danger" style={{padding:'2px 8px',fontSize:'.75rem'}} onClick={()=>removeTicker(t)}>삭제</button>
             </div>
@@ -4136,7 +4206,7 @@ function SettingsDrawer({settings, onSave, onClose, serverHasKey}) {
         <div className="settings-group">
           <label>Google AI API 키</label>
           <input type="password" value={s.apiKey} onChange={e=>set('apiKey',e.target.value)} placeholder="AIza..."/>
-          <p style={{fontSize:'.75rem',color:'#64748b',marginTop:4}}>
+          <p style={{fontSize:'.75rem',color:'#8794a8',marginTop:4}}>
             <a href="https://aistudio.google.com/apikey" target="_blank" style={{color:'#60a5fa'}}>aistudio.google.com/apikey</a> 에서 무료 발급
           </p>
         </div>
