@@ -978,6 +978,91 @@ function prepareCandles(ohlcv, type) {
   return {closed, price};
 }
 
+// ─── 내 포지션 전략 (평단·비중·레버리지 → 리스크 수치 + 규칙 기반 조언) ─────────
+// 모든 수치는 결정론적 계산. 청산가는 격리 마진 근사치(유지증거금률 mmr, 수수료·펀딩비 제외).
+const ACCOUNT_RISK_LIMIT = 2;   // 손절 시 계좌 손실 한도(%) — 일반적인 1~2% 규칙
+
+function buildPositionAdvice(inp, ctx) {
+  const {avg, weightPct, futures, side: sideIn, mmr = 0.5} = inp;
+  const lev = futures ? Math.max(1, Number(inp.lev) || 1) : 1;
+  const side = futures && sideIn === 'short' ? -1 : 1;       // 현물은 항상 롱
+  const {price, atr, levels, stance, plan} = ctx;
+  if (!(avg > 0) || !(weightPct > 0) || !(price > 0)) return null;
+  const a = atr || price * 0.02;
+  const w = weightPct / 100, m = mmr / 100;
+
+  const movePct = side * (price / avg - 1) * 100;              // 가격 기준 손익
+  const marginPct = movePct * lev;                              // 증거금 기준 손익
+  const accountPct = marginPct * w;                             // 계좌 영향
+  const exposurePct = weightPct * lev;                          // 실질 노출 (총자산 대비)
+
+  // 보호 손절선: 보유 방향의 반대쪽에서 0.8 ATR 이상 떨어진 가장 가까운 레벨 ± 0.2 ATR, 없으면 1.5 ATR
+  const pool = side > 0 ? levels.supports : levels.resistances;
+  const lv = pool.find(l => Math.abs(l.price - price) >= 0.8 * a);
+  const stop = lv ? lv.price - side * 0.2 * a : price - side * 1.5 * a;
+  const stopSrc = lv ? lv.src : '1.5 ATR';
+  const stopMovePct = side * (stop / price - 1) * 100;          // 지금부터 손절까지 (음수)
+  const accountAtStop = side * (stop / avg - 1) * 100 * lev * w; // 손절 시 계좌 손익(평단 기준)
+  const riskFromNow = Math.abs(stopMovePct) * lev * w;           // 지금부터 손절까지 추가 손실(계좌 %)
+
+  // 청산가 (선물·격리 근사) 와 안전 레버리지(손절선보다 1 ATR 더 바깥에 청산가)
+  let liq = null, liqDistPct = null, liqAtr = null, safeLev = null, liqBeforeStop = false, liqTooClose = false;
+  if (futures) {
+    liq = side > 0 ? avg * (1 - 1/lev + m) : avg * (1 + 1/lev - m);
+    liqDistPct = side * (price / liq - 1) * 100;
+    liqAtr = Math.abs(price - liq) / a;
+    liqBeforeStop = side > 0 ? liq >= stop : liq <= stop;
+    const guard = side > 0 ? (stop - a) / avg : (stop + a) / avg;
+    const denom = side > 0 ? 1 + m - guard : guard - 1 + m;
+    safeLev = denom > 0 ? Math.max(1, Math.floor(1 / denom)) : null;
+    liqTooClose = side > 0 ? liq > stop - a : liq < stop + a;      // 청산가가 '손절선 바깥 1 ATR' 안쪽 = 안전 레버리지 초과
+  }
+
+  // 익절 후보: 보유 방향 쪽의 가까운 레벨 2개
+  const targets = (side > 0 ? levels.resistances : levels.supports).slice(0, 2);
+
+  const tips = [];   // {lv: 'danger'|'warn'|'info'|'ok', text}
+  if (futures && liqBeforeStop) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 보호 손절선(${fmtN(stop)})보다 먼저 옵니다. 손절이 작동하기 전에 청산됩니다 → 레버리지를 ${safeLev ? safeLev + '배 이하로' : '크게'} 낮추거나 증거금을 추가하세요.`});
+  else if (futures && liqTooClose) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 손절선(${fmtN(stop)})과 1 ATR도 떨어져 있지 않습니다. 꼬리·갭 한 번에 손절 대신 청산될 수 있습니다 → ${safeLev ? safeLev + '배 이하' : '더 낮은 레버리지'}를 권장합니다.`});
+  else if (futures && liqAtr < 6) tips.push({lv:'warn', text:`손절선이 먼저 작동하는 구조지만 청산가까지 ${liqAtr.toFixed(1)} ATR입니다. 손절 주문을 반드시 걸어두세요 (미설정 시 급변동에 청산 위험).`});
+  if (riskFromNow > ACCOUNT_RISK_LIMIT) {
+    const cut = Math.round((1 - ACCOUNT_RISK_LIMIT / riskFromNow) * 100);
+    tips.push({lv:'warn', text:`손절선까지 가면 계좌의 ${riskFromNow.toFixed(1)}%를 추가로 잃습니다 (권장 ${ACCOUNT_RISK_LIMIT}% 이하). 포지션을 약 ${cut}% 줄이면 한도 안에 들어옵니다.`});
+  }
+  if (exposurePct > 100) tips.push({lv:'warn', text:`실질 노출이 총자산의 ${exposurePct.toFixed(0)}%입니다 (비중 ${weightPct}% × ${lev}배).`});
+
+  const inProfit = movePct > 0.1, inLoss = movePct < -0.1;   // ±0.1%는 본전
+  if (side > 0) {
+    if (stance === 'long') {
+      tips.push({lv:'ok', text:`지표 판정 롱 — 보유 유지 구간입니다. 보호 손절선 ${fmtN(stop)}(${stopSrc})을 지키세요.`});
+      if (inProfit && targets[0] && Math.abs(targets[0].price - price) <= a) tips.push({lv:'info', text:`가까운 저항 ${fmtN(targets[0].price)}(${targets[0].src})이 1 ATR 이내입니다 — 일부 익절을 고려할 만합니다.`});
+      if (!inProfit && plan && Math.abs(price - plan.entry1) <= 0.5 * a && riskFromNow <= ACCOUNT_RISK_LIMIT)
+        tips.push({lv:'info', text:`현재가가 매매 플랜 진입가 부근입니다. 추가 매수는 추가 후에도 손절 시 계좌 손실이 ${ACCOUNT_RISK_LIMIT}% 이내일 때만 고려하세요.`});
+    } else if (stance === 'neutral') {
+      tips.push({lv:'info', text:'지표 판정 관망 — 보유는 유지하되 추가 매수(물타기)는 보류하세요.'});
+    } else if (stance === 'avoid') {
+      tips.push({lv:'warn', text:`지표 판정 매수 회피(하락 우위) — 추가 매수 금지, 비중 축소를 고려하세요.${inProfit ? ' 수익 구간이면 일부 익절이 합리적입니다.' : ' 손절선 이탈 시 지체 없이 정리하세요.'}`});
+    } else if (stance === 'bear') {
+      tips.push({lv:'warn', text:'BTC가 200일선 아래(하락장 필터) — 과거 하락장에서 롱 신호는 손실이었습니다. 레버리지·비중을 낮추고 추가 매수를 보류하세요.'});
+    }
+    if (inProfit && price - avg > 1.5 * a) tips.push({lv:'info', text:`평단 대비 ${((price-avg)/a).toFixed(1)} ATR 수익 — 손절선을 평단(${fmtN(avg)}) 근처로 올려 본전 이상을 확보하는 방법이 있습니다.`});
+    if (inLoss && stance !== 'long') tips.push({lv:'warn', text:'손실 구간 + 롱 판정 아님 — 평단을 낮추려는 추가 매수(물타기)는 손실을 키울 수 있습니다.'});
+  } else {
+    tips.push({lv:'info', text:'숏 포지션: 이 앱의 하락 신호는 과거 검증에서 예측력이 없어 방향 조언은 하지 않고 리스크 관리만 제시합니다.'});
+    if (stance === 'long') tips.push({lv:'warn', text:`지표는 상승 우위(롱)로 보유 방향과 반대입니다. 손절선 ${fmtN(stop)}(${stopSrc})을 엄수하고 비중 축소를 고려하세요.`});
+    if (inProfit && targets[0]) tips.push({lv:'info', text:`가까운 지지 ${fmtN(targets[0].price)}(${targets[0].src}) 부근에서 일부 익절을 고려할 수 있습니다.`});
+  }
+  const sev = tips.some(t=>t.lv==='danger') ? 'danger' : tips.some(t=>t.lv==='warn') ? 'warn' : 'ok';
+  const headline = futures && (liqBeforeStop || liqTooClose) ? '레버리지 축소 필요 (청산 위험)'
+    : riskFromNow > ACCOUNT_RISK_LIMIT ? '비중 축소 권장'
+    : side > 0 && (stance === 'avoid' || stance === 'bear') ? (inProfit ? '일부 익절 · 비중 축소 고려' : '추가 매수 금지 · 손절선 엄수')
+    : side > 0 && stance === 'long' ? '보유 유지 · 손절선 관리'
+    : '보유 유지 · 추가 매수 보류';
+  return {side, lev, futures, movePct, marginPct, accountPct, exposurePct, stop, stopSrc, stopMovePct, accountAtStop, riskFromNow,
+          liq, liqDistPct, liqAtr, liqBeforeStop, safeLev, targets, tips, sev, headline, mmr};
+}
+function fmtN(v) { return v==null||isNaN(v) ? '—' : Math.abs(v)>=1 ? Number(v).toLocaleString(undefined,{maximumFractionDigits:2}) : Number(v).toPrecision(4); }
+
 function buildLocalReport(p1) {
   const c = p1.computed, P = TF_PRESETS[p1.tfId] || TF_PRESETS['1d'];
   const tf = TIMEFRAMES.find(t=>t.id===p1.tfId);
@@ -989,7 +1074,7 @@ function buildLocalReport(p1) {
     support: c.levels.supports[0]?.price ?? null,
     resistance: c.levels.resistances[0]?.price ?? null,
     target_price: c.tradePlan.profit1, stop_loss: c.tradePlan.stopLoss,
-    risk_level: c.riskLevel, time_horizon: P.horizon, setup_type: P.setup, _local: true,
+    risk_level: c.riskLevel, time_horizon: P.horizon, setup_type: P.setup, market: p1.type, _local: true,
   };
 }
 
@@ -2754,6 +2839,127 @@ function AnalysisSection({report}) {
   );
 }
 
+// ─── 내 포지션 전략 카드 ──────────────────────────────────────────────────────
+const POSITIONS_KEY = 'cs_positions';
+function PositionAdvisor({report}) {
+  const ticker = (report?.ticker || '').toUpperCase();
+  const isCrypto = report?.market === 'crypto';
+  const [open, setOpen] = React.useState(true);
+  const [f, setF] = React.useState(() => {
+    const saved = (ls_get(POSITIONS_KEY, {}) || {})[ticker];
+    if (saved) return saved;
+    const pf = (loadPortfolio() || []).find(p => (p.ticker||'').toUpperCase() === ticker);
+    return {futures:false, side:'long', lev:'3', avg: pf ? String(pf.avgCost) : '', weight:'', total:''};
+  });
+  React.useEffect(() => {
+    if (!ticker) return;
+    const all = ls_get(POSITIONS_KEY, {}) || {};
+    all[ticker] = f; ls_set(POSITIONS_KEY, all);
+  }, [f, ticker]);
+  if (!report?.computed) return null;
+  const c = report.computed;
+  const set = (k, v) => setF(prev => ({...prev, [k]: v}));
+  const futures = isCrypto && f.futures;
+  const adv = buildPositionAdvice(
+    {avg: parseFloat(f.avg), weightPct: parseFloat(f.weight), lev: parseFloat(f.lev), futures, side: f.side},
+    {price: report.price, atr: c.atr, levels: c.levels, stance: stanceOf(report), plan: c.tradePlan});
+  const total = parseFloat(f.total) > 0 ? parseFloat(f.total) : null;
+  const money = pct => total ? ` (${Math.round(total*pct/100).toLocaleString()})` : '';
+  const sgn = v => { const x = Math.abs(v) < 0.005 ? 0 : v; return `${x>=0?'+':''}${x.toFixed(2)}%`; };
+  const col = v => Math.abs(v) < 0.005 ? '#94a3b8' : v>=0 ? '#4ade80' : '#f87171';
+  const tipColor = {danger:'#f87171', warn:'#fbbf24', info:'#93c5fd', ok:'#4ade80'};
+  const tipIcon  = {danger:'⛔', warn:'⚠️', info:'💡', ok:'✅'};
+  const seg = (on) => ({padding:'5px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',cursor:'pointer',fontSize:'.8rem',fontWeight:600});
+  const inp = {width:'100%',padding:'7px 10px',background:'#0f172a',border:'1px solid #334155',borderRadius:6,color:'#e2e8f0',fontSize:'.85rem'};
+  const lab = {fontSize:'.72rem',color:'#64748b',marginBottom:4,display:'block'};
+  const Box = ({label, value, color, sub}) => (
+    <div style={{flex:'1 1 140px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
+      <div style={{fontSize:'.7rem',color:'#64748b',marginBottom:3}}>{label}</div>
+      <div style={{fontSize:'.98rem',fontWeight:800,color:color||'#e2e8f0',fontFamily:'monospace'}}>{value}</div>
+      {sub && <div style={{fontSize:'.7rem',color:'#475569',marginTop:2}}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
+        <span>🧭 내 포지션 전략</span><span style={{fontSize:'.9rem',color:'#475569'}}>{open?'▲':'▼'}</span>
+      </div>
+      {open && <>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end',marginBottom:14}}>
+        <div>
+          <span style={lab}>거래 유형</span>
+          <div style={{display:'flex'}}>
+            <button style={{...seg(!futures),borderRadius:'6px 0 0 6px'}} onClick={()=>set('futures',false)}>현물</button>
+            <button style={{...seg(futures),borderRadius:'0 6px 6px 0',opacity:isCrypto?1:0.4,cursor:isCrypto?'pointer':'not-allowed'}}
+              onClick={()=>isCrypto && set('futures',true)} title={isCrypto?'':'선물(레버리지)은 코인에서만 지원'}>선물(레버리지)</button>
+          </div>
+        </div>
+        {futures && <>
+          <div>
+            <span style={lab}>방향</span>
+            <div style={{display:'flex'}}>
+              <button style={{...seg(f.side==='long'),borderRadius:'6px 0 0 6px'}} onClick={()=>set('side','long')}>롱</button>
+              <button style={{...seg(f.side==='short'),borderRadius:'0 6px 6px 0'}} onClick={()=>set('side','short')}>숏</button>
+            </div>
+          </div>
+          <div style={{width:90}}>
+            <span style={lab}>레버리지(배)</span>
+            <input style={inp} type="number" min="1" max="125" value={f.lev} onChange={e=>set('lev',e.target.value)}/>
+          </div>
+        </>}
+        <div style={{flex:'1 1 130px'}}>
+          <span style={lab}>평균 단가 ({currencySym(ticker)})</span>
+          <input style={inp} type="number" placeholder={String(report.price ?? '')} value={f.avg} onChange={e=>set('avg',e.target.value)}/>
+        </div>
+        <div style={{flex:'1 1 110px'}}>
+          <span style={lab}>비중 (총자산 대비 %{futures?', 증거금':''})</span>
+          <input style={inp} type="number" min="0" max="100" placeholder="예: 20" value={f.weight} onChange={e=>set('weight',e.target.value)}/>
+        </div>
+        <div style={{flex:'1 1 130px'}}>
+          <span style={lab}>총자산 (선택, 금액 표시용)</span>
+          <input style={inp} type="number" placeholder="예: 10000000" value={f.total} onChange={e=>set('total',e.target.value)}/>
+        </div>
+      </div>
+
+      {!adv ? (
+        <div style={{fontSize:'.83rem',color:'#64748b',padding:'6px 0 4px'}}>평균 단가와 비중을 입력하면 손익·손절 시 계좌 손실{isCrypto?'·청산가':''}와 전략을 계산합니다. 입력값은 이 브라우저에 종목별로 저장됩니다.</div>
+      ) : <>
+        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12,padding:'10px 14px',borderRadius:8,
+          background: adv.sev==='danger'?'#450a0a':adv.sev==='warn'?'#451a03':'#052e16',
+          border:`1px solid ${adv.sev==='danger'?'#7f1d1d':adv.sev==='warn'?'#92400e':'#166534'}`}}>
+          <span style={{fontWeight:900,fontSize:'1rem',color:adv.sev==='danger'?'#f87171':adv.sev==='warn'?'#fbbf24':'#4ade80'}}>{adv.headline}</span>
+          <span style={{fontSize:'.76rem',color:'#94a3b8'}}>판정: {STANCE_UI[stanceOf(report)].label} · {STANCE_UI[stanceOf(report)].sub}</span>
+        </div>
+
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
+          <Box label="현재 손익 (가격 기준)" value={sgn(adv.movePct)} color={col(adv.movePct)} sub={adv.lev>1 ? `증거금 기준 ${sgn(adv.marginPct)}` : null}/>
+          <Box label="계좌 영향" value={sgn(adv.accountPct)} color={col(adv.accountPct)} sub={total ? `약 ${Math.round(total*adv.accountPct/100).toLocaleString()}` : null}/>
+          <Box label="실질 노출 (총자산 대비)" value={`${adv.exposurePct.toFixed(0)}%`} color={adv.exposurePct>100?'#fbbf24':'#e2e8f0'} sub={`비중 ${f.weight}% × ${adv.lev}배`}/>
+          <Box label="보호 손절선" value={fmtPx(adv.stop, ticker)} color="#fb923c" sub={`${adv.stopSrc} · 현재가 대비 ${sgn(adv.stopMovePct)}`}/>
+          <Box label="손절 시 추가 손실 (계좌)" value={`-${adv.riskFromNow.toFixed(2)}%${money(adv.riskFromNow)}`} color={adv.riskFromNow>ACCOUNT_RISK_LIMIT?'#f87171':'#94a3b8'} sub={`권장 ${ACCOUNT_RISK_LIMIT}% 이하 · 평단 기준 ${sgn(adv.accountAtStop)}`}/>
+          {adv.futures && <Box label="예상 청산가 (격리)" value={fmtPx(adv.liq, ticker)} color={adv.liqBeforeStop||adv.liqAtr<3?'#f87171':adv.liqAtr<6?'#fbbf24':'#e2e8f0'} sub={`현재가 대비 ${adv.liqDistPct.toFixed(1)}% · ${adv.liqAtr.toFixed(1)} ATR`}/>}
+          {adv.futures && <Box label="안전 레버리지 (손절선 바깥 1 ATR)" value={adv.safeLev ? `${adv.safeLev}배 이하` : '제한 없음'} color={adv.safeLev && adv.lev>adv.safeLev?'#f87171':'#4ade80'} sub={`현재 ${adv.lev}배`}/>}
+          {adv.targets.length>0 && <Box label={adv.side>0?'익절 후보 (가까운 저항)':'익절 후보 (가까운 지지)'} value={adv.targets.map(t=>fmtPx(t.price,ticker)).join(' / ')} color="#a78bfa" sub={adv.targets.map(t=>t.src).join(' / ')}/>}
+        </div>
+
+        <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          {adv.tips.map((t,i)=>(
+            <div key={i} style={{fontSize:'.83rem',lineHeight:1.6,color:tipColor[t.lv],background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'8px 12px'}}>
+              {tipIcon[t.lv]} {t.text}
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:'.72rem',color:'#475569',marginTop:10,lineHeight:1.6}}>
+          {adv.futures && `청산가는 격리 마진·유지증거금률 ${adv.mmr}% 가정 근사치이며 수수료·펀딩비를 제외합니다. 교차 마진은 계좌 잔고에 따라 달라지므로 거래소 화면의 청산가를 우선하세요. `}
+          보호 손절선은 가까운 지지·저항과 ATR로 계산한 참고값입니다. 판정별 과거 성과는 위 실측 통계를 참고하세요. 투자 권유가 아닙니다.
+        </div>
+      </>}
+      </>}
+    </div>
+  );
+}
+
 function ConclusionSection({report}) {
   const [open, setOpen] = React.useState(true);
   if(!report) return null;
@@ -3281,6 +3487,8 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
           )}
 
           <AnalysisSection report={shown}/>
+
+          <PositionAdvisor key={shown.ticker} report={shown}/>
 
           {aiLoading && (
             <div className="card">
