@@ -991,7 +991,7 @@ function computeTechIndicators(ohlcv, opts={}) {
     fibs, fibExts, rounds, levels, tradePlan, facts,
     score: sc.score, scoreBreakdown: sc.comps,
     verdict: (() => {
-      const stance = decideStance(sc.score, opts.regime);
+      const stance = decideStance(sc.score, tfId === '1d' ? opts.regime : null);   // 필터는 일봉에서만 검증됨
       const bucket = stance === 'long' ? (sc.score>=75 ? 'long_75' : sc.score>=50 ? 'long_50' : 'long_25') : stance;
       const stats = (opts.market === 'crypto' && tfId === '1d') ? {...EMPIRICAL_CRYPTO_1D[bucket], bucket} : null;
       return {stance, position: stance === 'long' ? 'long' : 'hold', confidence: stats ? Math.round(stats.up) : null, stats};
@@ -1092,6 +1092,85 @@ function buildPositionAdvice(inp, ctx) {
           liq, liqDistPct, liqAtr, liqBeforeStop, safeLev, targets, tips, sev, headline, mmr};
 }
 function fmtN(v) { return v==null||isNaN(v) ? '—' : Math.abs(v)>=1 ? Number(v).toLocaleString(undefined,{maximumFractionDigits:2}) : Number(v).toPrecision(4); }
+
+// ─── 성과 자동 채점 ───────────────────────────────────────────────────────────
+// 기록된 판정·매매 플랜을 "그 이후 실제 캔들"로 채점. 규칙은 워크포워드 백테스트와 동일:
+// 지정가는 10봉 안에 닿아야 체결, 체결 후 최대 40봉 보유, 같은 봉에서 손절·익절 동시 터치는 손절로 처리(보수적).
+const GRADE_RULES = {fillWait: 10, holdMax: 40, fwdBars: 20};
+
+// log: {price, entry, stop, tp1, entryMode, stance|position}, bars: 기록 시점 이후의 완성된 캔들(오름차순)
+function gradeLog(log, bars) {
+  const {fillWait, holdMax, fwdBars} = GRADE_RULES;
+  const out = {fwd: null, fwdPending: true, trade: {state: 'n/a'}, final: false};
+
+  // 1) 판정과 무관한 "N봉 후 수익률" — 모든 판정의 적중 여부 비교용
+  if (log.price > 0 && bars.length >= fwdBars) { out.fwd = bars[fwdBars-1].close / log.price - 1; out.fwdPending = false; }
+
+  // 2) 롱 판정만 매매 시뮬레이션 (이 앱은 롱 플랜만 제시)
+  const isLong = (log.stance || log.position) === 'long';
+  const hasPlan = log.entry > 0 && log.stop > 0 && log.tp1 > 0 && log.stop < log.entry && log.tp1 > log.entry;
+  if (!isLong) out.trade = {state: 'n/a'};
+  else if (!hasPlan) out.trade = {state: 'noplan'};
+  else {
+    const mode = log.entryMode || (log.price && Math.abs(log.entry/log.price - 1) < 0.001 ? 'market' : 'limit');
+    let fi = -1, fill = null;
+    if (mode === 'market') { if (bars.length) { fi = 0; fill = bars[0].open; } }
+    else for (let k = 0; k < Math.min(fillWait, bars.length); k++) {
+      if (bars[k].low <= log.entry) { fi = k; fill = Math.min(bars[k].open, log.entry); break; }
+    }
+    if (fi < 0) out.trade = {state: bars.length >= fillWait ? 'unfilled' : 'waiting', barsSeen: bars.length};
+    else {
+      const risk = fill - log.stop;
+      if (risk <= 0) out.trade = {state: 'stop', R: -1, bars: 0, fill, note: '체결가가 손절선 아래 (갭 하락)'};
+      else {
+        out.trade = null;
+        for (let k = fi; k < Math.min(fi + holdMax, bars.length); k++) {
+          const b = bars[k];
+          if (b.low <= log.stop) {                         // 손절 우선
+            const px = k > fi && b.open < log.stop ? b.open : log.stop;
+            out.trade = {state: 'stop', R: (px - fill)/risk, bars: k - fi, fill}; break;
+          }
+          if (b.high >= log.tp1) { out.trade = {state: 'tp', R: (log.tp1 - fill)/risk, bars: k - fi, fill}; break; }
+        }
+        if (!out.trade) {
+          const held = bars.length - fi, last = bars[bars.length-1].close;
+          out.trade = held >= holdMax
+            ? {state: 'timeout', R: (bars[fi+holdMax-1].close - fill)/risk, bars: holdMax, fill}
+            : {state: 'open', R: (last - fill)/risk, bars: held, fill};      // 진행 중 (평가손익)
+        }
+      }
+    }
+  }
+  const tradeDone = ['n/a','noplan','unfilled','stop','tp','timeout'].includes(out.trade.state);
+  out.final = tradeDone && !out.fwdPending;
+  return out;
+}
+
+// 채점된 기록들 요약
+function summarizeGrades(logs) {
+  const g = logs.filter(l => l.grade);
+  const trades = g.map(l => l.grade.trade).filter(t => ['tp','stop','timeout'].includes(t.state));
+  const R = trades.map(t => t.R);
+  const byStance = {};
+  g.forEach(l => {
+    if (l.grade.fwd == null) return;
+    const k = l.stance || (l.position === 'long' ? 'long' : 'neutral');
+    (byStance[k] = byStance[k] || []).push(l.grade.fwd);
+  });
+  const stanceRows = Object.entries(byStance).map(([k, a]) => ({
+    stance: k, n: a.length, avg: a.reduce((x,y)=>x+y,0)/a.length, up: a.filter(x=>x>0).length/a.length,
+  }));
+  return {
+    graded: g.length, final: g.filter(l => l.grade.final).length,
+    trades: trades.length, wins: trades.filter(t => t.state==='tp').length,
+    stops: trades.filter(t => t.state==='stop').length, timeouts: trades.filter(t => t.state==='timeout').length,
+    open: g.filter(l => l.grade.trade.state==='open').length,
+    waiting: g.filter(l => l.grade.trade.state==='waiting').length,
+    unfilled: g.filter(l => l.grade.trade.state==='unfilled').length,
+    avgR: R.length ? R.reduce((a,b)=>a+b,0)/R.length : null, sumR: R.reduce((a,b)=>a+b,0),
+    stanceRows,
+  };
+}
 
 function buildLocalReport(p1) {
   const c = p1.computed, P = TF_PRESETS[p1.tfId] || TF_PRESETS['1d'];
@@ -1445,6 +1524,24 @@ async function fetchCurrentPrice(query, mode='crypto') {
     return fetchCryptoPrice(ticker);
   }
   return fetchYahooPrice(ticker);
+}
+
+// 기록 시점 이후에 시작한, 이미 완성된 캔들만 (현물 → 선물 순)
+async function fetchBarsSince(ticker, tfId, sinceMs, limit=70) {
+  const tf = TIMEFRAMES.find(t => t.id === tfId) || TIMEFRAMES.find(t => t.id === '1d');
+  const sym = await resolveBinanceSymbol(ticker);
+  for (const base of [BINANCE_BASE, 'https://fapi.binance.com/fapi/v1']) {
+    try {
+      const r = await fetch(`${base}/klines?symbol=${sym}&interval=${tf.binanceInterval}&startTime=${sinceMs}&limit=${limit}`, {signal: AbortSignal.timeout(8000)});
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (!Array.isArray(d)) continue;
+      const now = Date.now();
+      return d.map(k => ({t:k[0], open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5], closeT:k[6]}))
+              .filter(b => b.t > sinceMs && b.closeT < now);
+    } catch {}
+  }
+  throw new Error(`${ticker} 캔들 조회 실패`);
 }
 
 const _ohlcvCache = {};
@@ -2632,6 +2729,7 @@ const STANCE_UI = {
   neutral: {label:'HOLD',     sub:'관망',               icon:'→', color:'#f59e0b', bg:'#451a03', border:'#92400e'},
   avoid:   {label:'매수 회피', sub:'하락 우위',          icon:'✕', color:'#f87171', bg:'#450a0a', border:'#7f1d1d'},
   bear:    {label:'HOLD',     sub:'BTC 하락장 필터',    icon:'⛨', color:'#fb923c', bg:'#431407', border:'#9a3412'},
+  image:   {label:'참고용',   sub:'이미지 AI 해설 · 판정 없음', icon:'🖼', color:'#94a3b8', bg:'#1e293b', border:'#334155'},
 };
 const stanceOf = r => r?.stance || (r?.position==='long' ? 'long' : 'neutral');
 
@@ -2713,7 +2811,7 @@ function ReportHero({report, aiPending}) {
           {stats && <span>📊 과거 실측 ({EMPIRICAL_CRYPTO_1D.period}, n={stats.n}): 20일 후 평균 <b style={{color:stats.avg>=0?'#4ade80':'#f87171'}}>{stats.avg>=0?'+':''}{stats.avg}%</b> · 중앙값 <b style={{color:stats.med>=0?'#4ade80':'#f87171'}}>{stats.med>=0?'+':''}{stats.med}%</b> <span style={{color:'#8794a8'}}>(전체 평균 +{EMPIRICAL_CRYPTO_1D.all.avg}% · 상승 {EMPIRICAL_CRYPTO_1D.all.up}%)</span></span>}
           {report.regime && (report.regime.unknown
             ? <span>₿ BTC 국면 확인 실패 — 하락장 필터 미적용</span>
-            : <span>₿ BTC {report.regime.btcAbove ? <b style={{color:'#4ade80'}}>200일선 위</b> : <b style={{color:'#fb923c'}}>200일선 아래 (하락장 필터 작동)</b>} · {fmtPx(report.regime.btcPrice,'BTC')} / MA200 {fmtPx(report.regime.btcMa200,'BTC')}</span>)}
+            : <span>₿ BTC {report.regime.btcAbove ? <b style={{color:'#4ade80'}}>200일선 위</b> : <b style={{color:'#fb923c'}}>200일선 아래{report.tfId==='1d' ? ' (하락장 필터 작동)' : ''}</b>} · {fmtPx(report.regime.btcPrice,'BTC')} / MA200 {fmtPx(report.regime.btcMa200,'BTC')}{report.tfId && report.tfId!=='1d' ? <span style={{color:'#8794a8'}}> · 필터는 일봉 분석에만 적용 (일봉으로만 검증됨)</span> : null}</span>)}
         </div>
       )}
       {report.signals?.length>0 && (
@@ -3347,7 +3445,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [logs, setLogs]     = useState(()=>ls_get('cs_logs',[]));
 
   const saveLog = r => {
-    const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, summary:r.summary?.slice(0,200)};
+    const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, stance:r.stance, summary:r.summary?.slice(0,200)};
     const updated = [...ls_get('cs_logs',[]), entry].slice(-200);
     ls_set('cs_logs', updated);
     setLogs(updated);
@@ -3397,7 +3495,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         lr.summary = 'AI 해설은 ⚙️에서 Google API 키를 넣으면 추가됩니다. 판정·점수·매매 플랜·포지션 전략은 키 없이 계산된 결과입니다.';
         setReport(lr);
         const entry = {date:new Date().toISOString(), ticker:lr.ticker, position:lr.position, confidence:lr.confidence, stance:lr.stance, summary:lr.summary,
-          tf:tfId, score:lr.score, price:lr.price, entry:lr.computed?.tradePlan?.entry1, stop:lr.stop_loss, tp1:lr.target_price};
+          tf:tfId, score:lr.score, price:lr.price, entry:lr.computed?.tradePlan?.entry1, stop:lr.stop_loss, tp1:lr.target_price, entryMode:lr.computed?.tradePlan?.entryMode};
         const prev = ls_get('cs_logs')||[];
         ls_set('cs_logs', [...prev.slice(-99), entry]);
         setLogs(prev => [...prev.slice(-99), entry]);
@@ -3413,7 +3511,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         setReport(r);
         // Save to logs
         const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, stance:r.stance, summary:r.summary,
-          tf:tfId, score:r.score, price:r.price, entry:r.computed?.tradePlan?.entry1, stop:r.stop_loss, tp1:r.target_price};
+          tf:tfId, score:r.score, price:r.price, entry:r.computed?.tradePlan?.entry1, stop:r.stop_loss, tp1:r.target_price, entryMode:r.computed?.tradePlan?.entryMode};
         const prev = ls_get('cs_logs')||[];
         ls_set('cs_logs', [...prev.slice(-99), entry]);
         setLogs(prev => [...prev.slice(-99), entry]);
@@ -3448,6 +3546,9 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
       const r = await callClaudeReport(vision, query||'업로드 이미지', null, apiKey);
       r.chartB64 = (imgType==='image/png'||!imgType) ? imgB64 : null;
       r.visionText = vision;
+      // 판정은 지표 계산으로만 한다 — 이미지 AI 결과의 position/가격은 쓰지 않음
+      Object.assign(r, {position:'hold', stance:'image', confidence:null, signals:[], support:null, resistance:null, target_price:null, stop_loss:null,
+        _dataError:'이미지 분석은 AI 해설(참고용)만 제공합니다. 판정·점수·매매 플랜은 종목을 검색해서 분석하세요.'});
       setReport(r);
       saveLog(r);
     } catch(e) { setError(e.message); }
@@ -3458,7 +3559,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const stockTickers = [{label:'AAPL',val:'AAPL'},{label:'TSLA',val:'TSLA'},{label:'NVDA',val:'NVDA'},{label:'MSFT',val:'MSFT'},{label:'삼성',val:'005930.KS'}];
   const cryptoTickers = [{label:'BTC',val:'BTC'},{label:'ETH',val:'ETH'},{label:'SOL',val:'SOL'},{label:'XRP',val:'XRP'},{label:'BNB',val:'BNB'},{label:'ADA',val:'ADA'},{label:'DOGE',val:'DOGE'},{label:'TON',val:'TON'}];
   const autoTickers = QUICK_TICKERS;
-  const quickList = mode==='stock' ? stockTickers : mode==='crypto' ? cryptoTickers : autoTickers;
+  const quickList = QUICK_TICKERS;
 
   const shown = report || (phase1 ? buildLocalReport(phase1) : null);
 
@@ -3690,85 +3791,161 @@ function CompareTab({apiKey, serverHasKey}) {
 }
 
 // ─── Performance Tab ──────────────────────────────────────────────────────────
-function PerformanceTab({apiKey, serverHasKey}) {
-  const [logs, setLogs]   = useState(()=>ls_get('cs_logs',[]));
-  const [evalResult, setEvalResult] = useState(null);
-  const [loading, setLoading] = useState(false);
+function PerformanceTab() {
+  const [logs, setLogs] = useState(() => ls_get('cs_logs', []));
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [msg, setMsg] = useState('');
 
-  const stats = useMemo(()=>{
-    if(!logs.length) return null;
-    const total = logs.length;
-    const byPos = logs.reduce((a,l)=>{a[l.position]=(a[l.position]||0)+1;return a;},{});
-    const avgConf = logs.reduce((a,l)=>a+(l.confidence||50),0)/total;
-    const recent = [...logs].reverse().slice(0,10);
-    return {total, byPos, avgConf: avgConf.toFixed(1), recent};
-  },[logs]);
-
-  const autoEvaluate = async () => {
-    if(!serverHasKey && !apiKey) return;
-    if(logs.length<5) { alert('분석 기록이 5개 이상 필요합니다.'); return; }
-    setLoading(true);
-    try {
-      const sample = [...logs].reverse().slice(0,20);
-      const summary = sample.map(l=>`${l.date?.slice(0,10)} ${l.ticker} ${l.position} ${l.confidence}%`).join('\n');
-      const text = await callGemini(GEMINI_REPORT_MODEL, [{
-        text: `다음은 AI 차트 분석 시스템의 최근 분석 기록입니다:\n\n${summary}\n\n이 분석 패턴을 평가해주세요: 편향성, 신뢰도 분포, 포지션 분포의 적절성, 개선 제안 등을 한국어로 분석해주세요.`,
-      }], apiKey);
-      setEvalResult(text);
-    } catch(e) { console.error(e); }
-    finally { setLoading(false); }
+  // 아직 결과가 확정되지 않은 기록만 이후 캔들을 받아 채점 (확정된 기록은 다시 받지 않음)
+  const regrade = async () => {
+    const all = ls_get('cs_logs', []);
+    const idx = all.map((_, i) => i)
+      .filter(i => { const l = all[i]; return l.price > 0 && l.ticker && l.date && l.stance !== 'image' && !(l.grade && l.grade.final); })
+      .slice(-100);
+    setLogs(all);
+    if (!idx.length) return;
+    setBusy(true); setMsg('');
+    let done = 0, fail = 0;
+    const queue = [...idx];
+    const need = Math.max(GRADE_RULES.fillWait + GRADE_RULES.holdMax, GRADE_RULES.fwdBars) + 5;
+    const worker = async () => {
+      while (queue.length) {
+        const i = queue.shift(), l = all[i];
+        try {
+          const bars = await fetchBarsSince(l.ticker, l.tf || '1d', new Date(l.date).getTime(), need);
+          all[i] = {...l, grade: {...gradeLog(l, bars), at: Date.now(), barsSeen: bars.length}};
+        } catch { fail++; }
+        setProgress(`${++done}/${idx.length}`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    // 채점 중에 새로 저장된 기록이 있으면 보존
+    const latest = ls_get('cs_logs', []);
+    const merged = latest.map(l => { const g = all.find(x => x.date === l.date && x.ticker === l.ticker); return g && g.grade ? {...l, grade: g.grade} : l; });
+    ls_set('cs_logs', merged); setLogs(merged);
+    setBusy(false); setProgress('');
+    if (fail) setMsg(`${fail}건은 캔들을 받지 못했습니다. 다음 채점 때 다시 시도합니다.`);
   };
+  useEffect(() => { regrade(); }, []);
+
+  const sm = useMemo(() => summarizeGrades(logs), [logs]);
+  const fmtR = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}R`;
+  const pct = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+  const colR = v => v == null ? '#94a3b8' : v > 0 ? '#4ade80' : v < 0 ? '#f87171' : '#94a3b8';
+  const tradeCell = l => {
+    const g = l.grade, t = g?.trade;
+    if (!g) return <span style={{color:'#8794a8'}}>{l.price > 0 ? '채점 전' : '구버전 기록'}</span>;
+    switch (t.state) {
+      case 'n/a':      return <span style={{color:'#8794a8'}}>— (롱 판정 아님)</span>;
+      case 'noplan':   return <span style={{color:'#8794a8'}}>플랜 없음</span>;
+      case 'waiting':  return <span style={{color:'#93c5fd'}}>체결 대기 ({t.barsSeen}/{GRADE_RULES.fillWait}봉)</span>;
+      case 'unfilled': return <span style={{color:'#8794a8'}}>미체결 ({GRADE_RULES.fillWait}봉 내 진입가 미도달)</span>;
+      case 'open':     return <span style={{color:'#93c5fd'}}>진행 중 {t.bars}봉 · 평가 <b style={{color:colR(t.R)}}>{fmtR(t.R)}</b></span>;
+      case 'tp':       return <span className="badge badge-green">익절 {fmtR(t.R)} · {t.bars}봉</span>;
+      case 'stop':     return <span className="badge badge-red">손절 {fmtR(t.R)} · {t.bars}봉</span>;
+      case 'timeout':  return <span className="badge badge-yellow">시간초과 {fmtR(t.R)}</span>;
+      default:         return '—';
+    }
+  };
+  const Tile = ({label, value, sub, color}) => (
+    <div className="stat-card" style={{textAlign:'left'}}>
+      <div className="stat-label" style={{marginTop:0,marginBottom:4}}>{label}</div>
+      <div className="stat-value" style={{fontSize:'1.35rem',color:color||'#e2e8f0'}}>{value}</div>
+      {sub && <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:4}}>{sub}</div>}
+    </div>
+  );
+  const stanceOrder = ['long','neutral','bear','avoid'];
 
   return (
     <div>
       <div className="card">
-        <div className="card-title" style={{justifyContent:'space-between'}}>
-          <span>📈 성과 분석</span>
-          <div style={{display:'flex',gap:8}}>
-            <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.8rem'}} onClick={autoEvaluate} disabled={loading}>AI 평가</button>
-            <button className="btn-danger"    style={{padding:'6px 12px',fontSize:'.8rem'}} onClick={()=>{ls_set('cs_logs',[]);setLogs([]);setEvalResult(null);}}>초기화</button>
+        <div className="card-title" style={{justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+          <span>📈 성과 — 판정 자동 채점</span>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            {busy && <span style={{fontSize:'.8rem',color:'#94a3b8'}}>채점 중 {progress}</span>}
+            <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.8rem'}} onClick={regrade} disabled={busy}>🔄 채점 업데이트</button>
+            <button className="btn-danger" style={{padding:'6px 12px',fontSize:'.8rem'}} onClick={()=>{ if(confirm('분석 기록과 채점 결과를 모두 지울까요?')){ ls_set('cs_logs',[]); setLogs([]); } }}>초기화</button>
           </div>
         </div>
-        {!stats ? (
-          <div className="no-data">분석 기록이 없습니다.<br/>📊 분석 탭에서 종목을 분석해보세요.</div>
-        ) : (
-          <>
-            <div className="grid-3" style={{marginBottom:16}}>
-              <div className="stat-card"><div className="stat-value">{stats.total}</div><div className="stat-label">총 분석</div></div>
-              <div className="stat-card"><div className="stat-value">{stats.avgConf}%</div><div className="stat-label">평균 신뢰도</div></div>
-              <div className="stat-card"><div className="stat-value">{stats.byPos.long||0}</div><div className="stat-label">롱 신호</div></div>
+        <div style={{fontSize:'.8rem',color:'#94a3b8',lineHeight:1.7,marginBottom:14}}>
+          분석할 때 기록된 진입·손절·1차 목표를 <b>그 이후 실제 캔들</b>로 채점합니다. 지정가는 {GRADE_RULES.fillWait}봉 안에 닿아야 체결,
+          체결 후 최대 {GRADE_RULES.holdMax}봉 보유, 같은 봉에서 손절·익절이 함께 닿으면 손절로 칩니다(보수적). 수수료는 제외합니다.
+        </div>
+        {msg && <div className="alert-box alert-warn" style={{fontSize:'.82rem'}}>{msg}</div>}
+
+        {!logs.length ? (
+          <div className="no-data">분석 기록이 없습니다.<br/>📊 분석 탭에서 코인을 분석하면 자동으로 기록되고, 시간이 지나면 여기서 채점됩니다.</div>
+        ) : <>
+          <div className="price-tags" style={{marginBottom:14}}>
+            <Tile label="분석 기록" value={logs.length} sub={`채점 확정 ${sm.final} · 진행 중 ${sm.open + sm.waiting}`}/>
+            <Tile label="롱 플랜 매매 결과" value={`${sm.trades}건`} sub={sm.trades ? `익절 ${sm.wins} · 손절 ${sm.stops} · 시간초과 ${sm.timeouts} · 미체결 ${sm.unfilled}` : `미체결 ${sm.unfilled}`}/>
+            <Tile label="익절 비율" value={sm.trades ? `${(sm.wins/sm.trades*100).toFixed(0)}%` : '—'} sub="백테스트: 약 44% (손익분기 약 41%)"/>
+            <Tile label="거래당 평균 / 누적" value={fmtR(sm.avgR)} color={colR(sm.avgR)} sub={`누적 ${fmtR(sm.trades ? sm.sumR : null)} · 백테스트(2023~) 약 +0.08R`}/>
+          </div>
+          {sm.trades < 30 && (
+            <div style={{fontSize:'.8rem',color:'#fbbf24',marginBottom:14}}>
+              ⚠ 확정된 매매 {sm.trades}건 — 30건 이상 쌓여야 의미 있는 판단이 가능합니다. 그 전에는 우연의 영향이 큽니다.
             </div>
-            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
-              {Object.entries(stats.byPos).map(([pos,cnt])=>(
-                <div key={pos} className="stat-card" style={{flex:1,minWidth:80}}>
-                  <div className={`stat-value pos-${pos}`}>{cnt}</div>
-                  <div className="stat-label">{pos}</div>
-                </div>
-              ))}
+          )}
+
+          {sm.stanceRows.length > 0 && (
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:'.84rem',fontWeight:700,color:'#cbd5e1',marginBottom:8}}>판정별 {GRADE_RULES.fwdBars}봉 후 실제 수익률</div>
+              <div style={{overflowX:'auto'}}>
+                <table>
+                  <thead><tr><th>판정</th><th style={{textAlign:'right'}}>기록</th><th style={{textAlign:'right'}}>평균</th><th style={{textAlign:'right'}}>상승 비율</th></tr></thead>
+                  <tbody>
+                    {[...sm.stanceRows].sort((a,b)=>stanceOrder.indexOf(a.stance)-stanceOrder.indexOf(b.stance)).map(r => {
+                      const st = STANCE_UI[r.stance] || STANCE_UI.neutral;
+                      return (
+                        <tr key={r.stance}>
+                          <td style={{color:st.color,fontWeight:700}}>{st.label} · {st.sub}</td>
+                          <td style={{textAlign:'right'}}>{r.n}</td>
+                          <td style={{textAlign:'right',color:colR(r.avg)}}>{pct(r.avg)}</td>
+                          <td style={{textAlign:'right'}}>{(r.up*100).toFixed(0)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:6}}>
+                롱 판정의 평균·상승 비율이 다른 판정보다 꾸준히 높아야 판정이 쓸모 있다는 뜻입니다.
+                참고: 백테스트(코인 일봉 2023~2026) 전체 기준선은 20일 후 상승 {EMPIRICAL_CRYPTO_1D.all.up}%.
+              </div>
             </div>
-            <table>
-              <thead><tr><th>날짜</th><th>티커</th><th>포지션</th><th>과거 상승률</th></tr></thead>
+          )}
+
+          <div style={{fontSize:'.84rem',fontWeight:700,color:'#cbd5e1',marginBottom:8}}>최근 기록</div>
+          <div style={{overflowX:'auto'}}>
+            <table style={{minWidth:640}}>
+              <thead><tr><th>날짜</th><th>코인 · 봉</th><th>판정</th><th>진입 / 손절 / 목표</th><th>매매 결과</th><th style={{textAlign:'right'}}>{GRADE_RULES.fwdBars}봉 후</th></tr></thead>
               <tbody>
-                {[...logs].reverse().slice(0,20).map((l,i)=>(
-                  <tr key={i}>
-                    <td style={{fontSize:'.75rem',color:'#8794a8'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
-                    <td style={{fontWeight:700}}>{l.ticker}</td>
-                    <td><span className={`badge ${l.position==='long'?'badge-green':l.position==='short'?'badge-red':'badge-yellow'}`}>{l.position}</span></td>
-                    <td>{l.confidence!=null ? `${l.confidence}%` : '—'}</td>
-                  </tr>
-                ))}
+                {[...logs].reverse().slice(0, 40).map((l, i) => {
+                  const st = STANCE_UI[l.stance] || STANCE_UI[l.position === 'long' ? 'long' : 'neutral'];
+                  const tf = (TIMEFRAMES.find(t => t.id === (l.tf || '1d')) || {}).label || '일봉';
+                  const g = l.grade;
+                  return (
+                    <tr key={i}>
+                      <td style={{fontSize:'.76rem',color:'#8794a8',whiteSpace:'nowrap'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
+                      <td style={{fontWeight:700,whiteSpace:'nowrap'}}>{l.ticker} <span style={{color:'#8794a8',fontWeight:500,fontSize:'.76rem'}}>{tf}</span></td>
+                      <td style={{whiteSpace:'nowrap'}}><span style={{color:st.color,fontWeight:700}}>{st.label}</span>{l.score != null && <span style={{color:'#8794a8',fontSize:'.76rem'}}> {l.score>0?'+':''}{l.score}</span>}</td>
+                      <td style={{fontSize:'.78rem',fontFamily:'monospace',whiteSpace:'nowrap'}}>
+                        {l.entry > 0 ? <>{fmtPx(l.entry,l.ticker)} / <span style={{color:'#fb923c'}}>{fmtPx(l.stop,l.ticker)}</span> / <span style={{color:'#a78bfa'}}>{fmtPx(l.tp1,l.ticker)}</span></> : '—'}
+                      </td>
+                      <td style={{fontSize:'.8rem'}}>{tradeCell(l)}</td>
+                      <td style={{textAlign:'right',whiteSpace:'nowrap',color: g?.fwd != null ? colR(g.fwd) : '#8794a8'}}>
+                        {g?.fwd != null ? pct(g.fwd) : g ? `대기 ${g.barsSeen}/${GRADE_RULES.fwdBars}봉` : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </>
-        )}
+          </div>
+        </>}
       </div>
-      {loading && <div className="card"><div className="loader"><div className="spinner"/></div></div>}
-      {evalResult && (
-        <div className="card">
-          <div className="card-title">🤖 AI 성과 평가</div>
-          <div className="report-pre">{evalResult}</div>
-        </div>
-      )}
     </div>
   );
 }
@@ -4095,10 +4272,10 @@ function MonitorTab({apiKey, settings, serverHasKey}) {
         const old = prev[t];
         if(old) {
           const chg = (p-old)/old*100;
-          if(Math.abs(chg)>=settings.alertThreshold/10) {
+          if(Math.abs(chg)>=(parseFloat(settings.priceAlertPct)||5)) {
             const alert = {ticker:t, oldPrice:old, newPrice:p, change:chg, time:new Date().toLocaleTimeString()};
             newAlerts.push(alert);
-            const report = {ticker:t, price:p, position:chg>0?'long':'short', confidence:70, summary:`${t} 가격 급변: ${chg.toFixed(2)}%`};
+            const report = {ticker:t, price:p, position:'hold', confidence:null, summary:`${t} 가격 ${chg>0?'급등':'급락'}: ${chg>0?'+':''}${chg.toFixed(2)}% (판정 아님 · 가격 변동 알림)`};
             if(settings.telegramToken) sendTelegramAlert(report, settings).catch(()=>{});
             if(settings.discordWebhook) sendDiscordAlert(report, settings).catch(()=>{});
           }
@@ -4209,6 +4386,11 @@ function SettingsDrawer({settings, onSave, onClose, serverHasKey}) {
         <div className="settings-group">
           <label>모니터링 간격 (초)</label>
           <input type="number" value={s.monitorInterval} onChange={e=>set('monitorInterval',e.target.value)} min="10" max="3600"/>
+        </div>
+
+        <div className="settings-group">
+          <label>모니터 가격 변동 알림 (%)</label>
+          <input type="number" value={s.priceAlertPct ?? 5} onChange={e=>set('priceAlertPct',e.target.value)} min="0.5" max="50" step="0.5"/>
         </div>
 
         <div className="settings-group">
