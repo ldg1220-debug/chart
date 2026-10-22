@@ -196,27 +196,18 @@ const GEMINI_VISION_MODEL = 'gemini-2.5-flash';
 const GEMINI_REPORT_MODEL = 'gemini-2.5-flash';
 
 const QUICK_TICKERS = [
-  {label:'AAPL',val:'AAPL'},{label:'TSLA',val:'TSLA'},{label:'NVDA',val:'NVDA'},
-  {label:'MSFT',val:'MSFT'},{label:'삼성',val:'005930.KS'},{label:'BTC',val:'BTC'},
-  {label:'ETH',val:'ETH'},{label:'SOL',val:'SOL'},
+  {label:'BTC',val:'BTC'},{label:'ETH',val:'ETH'},{label:'SOL',val:'SOL'},{label:'XRP',val:'XRP'},
+  {label:'BNB',val:'BNB'},{label:'DOGE',val:'DOGE'},{label:'SUI',val:'SUI'},{label:'HYPE',val:'HYPE'},
 ];
 
 const SUGGESTIONS = [
-  {q:'AAPL',label:'Apple Inc.', type:'stock'},
-  {q:'TSLA',label:'Tesla Inc.', type:'stock'},
-  {q:'NVDA',label:'NVIDIA Corp.', type:'stock'},
-  {q:'MSFT',label:'Microsoft Corp.', type:'stock'},
-  {q:'GOOGL',label:'Alphabet Inc.', type:'stock'},
-  {q:'META',label:'Meta Platforms', type:'stock'},
-  {q:'AMZN',label:'Amazon.com', type:'stock'},
-  {q:'005930.KS',label:'Samsung Electronics', type:'stock'},
-  {q:'000660.KS',label:'SK Hynix', type:'stock'},
-  {q:'035420.KS',label:'NAVER Corp.', type:'stock'},
-  {q:'BTC',label:'Bitcoin', type:'crypto'},
-  {q:'ETH',label:'Ethereum', type:'crypto'},
-  {q:'SOL',label:'Solana', type:'crypto'},
-  {q:'XRP',label:'Ripple', type:'crypto'},
-  {q:'BNB',label:'BNB', type:'crypto'},
+  {q:'BTC',label:'Bitcoin', type:'crypto'},   {q:'ETH',label:'Ethereum', type:'crypto'},
+  {q:'SOL',label:'Solana', type:'crypto'},    {q:'XRP',label:'Ripple', type:'crypto'},
+  {q:'BNB',label:'BNB', type:'crypto'},       {q:'DOGE',label:'Dogecoin', type:'crypto'},
+  {q:'ADA',label:'Cardano', type:'crypto'},   {q:'SUI',label:'Sui', type:'crypto'},
+  {q:'HYPE',label:'Hyperliquid', type:'crypto'}, {q:'LINK',label:'Chainlink', type:'crypto'},
+  {q:'AVAX',label:'Avalanche', type:'crypto'}, {q:'TON',label:'Toncoin', type:'crypto'},
+  {q:'PEPE',label:'Pepe', type:'crypto'},
 ];
 
 // ─── Ticker Mappings ──────────────────────────────────────────────────────────
@@ -432,7 +423,7 @@ const BINANCE_SYMBOL_MAP = {
   'dogecoin':'DOGEUSDT','doge':'DOGEUSDT','도지':'DOGEUSDT',
   'cardano':'ADAUSDT','ada':'ADAUSDT',
   'avalanche-2':'AVAXUSDT','avax':'AVAXUSDT','avalanche':'AVAXUSDT',
-  'matic-network':'MATICUSDT','matic':'MATICUSDT','pol':'POLUSDT','polygon':'MATICUSDT',
+  'matic-network':'POLUSDT','matic':'POLUSDT','pol':'POLUSDT','polygon':'POLUSDT',   // MATIC → POL 전환
   'chainlink':'LINKUSDT','link':'LINKUSDT',
   'polkadot':'DOTUSDT','dot':'DOTUSDT',
   'cosmos':'ATOMUSDT','atom':'ATOMUSDT',
@@ -474,7 +465,7 @@ const BINANCE_SYMBOL_MAP = {
   'pixels':'PIXELUSDT','pixel':'PIXELUSDT',
   'portal':'PORTALUSDT','portal-gaming':'PORTALUSDT',
   'jito-governance-token':'JITOUSDT','jito':'JITOUSDT',
-  'tensor':'TNSR','tnsr':'TNSRUSDT',
+  'tensor':'TNSRUSDT','tnsr':'TNSRUSDT',
   'zeta-chain':'ZETAUSDT','zeta':'ZETAUSDT',
   'celestia':'TIAUSDT','tia':'TIAUSDT',
   'saga':'SAGAUSDT',
@@ -529,7 +520,7 @@ const BINANCE_SYMBOL_MAP = {
   'iota':'IOTAUSDT',
   'theta-token':'THETAUSDT','theta':'THETAUSDT',
   'flow':'FLOWUSDT',
-  'fantom':'FTMUSDT','ftm':'FTMUSDT',
+  'fantom':'SUSDT','ftm':'SUSDT',   // FTM → S(Sonic) 전환
   'kucoin-shares':'KSMUSDT','ksm':'KSMUSDT',
   'edgex':'EDGEXUSDT','edge-matrix-computing':'EDGEXUSDT','edge':'EDGEUSDT',
 };
@@ -748,7 +739,7 @@ function buildTradePlan(dir, price, a, levels, swing, fibExts) {
   const entryMode = near.length ? 'limit' : 'market';
   const entry1 = near.length ? near[0].price : price;
   const e2c = near.find(l => Math.abs(l.price-entry1) >= 0.5*a);
-  const entry2 = e2c ? e2c.price : entry1 - side*a;
+  let entry2 = e2c ? e2c.price : entry1 - side*a;
 
   const atrStop = entry1 - side*1.5*a;
   const swList = dir==='long' ? swing.lows : swing.highs;
@@ -759,6 +750,8 @@ function buildTradePlan(dir, price, a, levels, swing, fibExts) {
   const valid = cand.filter(s => Math.abs(entry1-s) >= 0.8*a);
   let stopLoss = (valid.length ? valid : [atrStop]).sort((x,y)=>Math.abs(entry1-x)-Math.abs(entry1-y))[0];
   if (stopLoss <= 0) stopLoss = entry1 * 0.5;
+  // 2차 진입가는 손절선보다 최소 0.3 ATR 안쪽이어야 함 — 아니면 진입1과 손절 사이(최대 1 ATR)로
+  if (side*(entry2 - stopLoss) < 0.3*a) entry2 = entry1 - side*Math.min(a, 0.5*Math.abs(entry1 - stopLoss));
   const R = Math.abs(entry1 - stopLoss);
 
   const targets = [
@@ -1117,7 +1110,8 @@ function buildLocalReport(p1) {
 
 // ─── Ticker Resolution ────────────────────────────────────────────────────────
 // mode: 'auto' | 'stock' | 'crypto'
-function resolveTicker(query, mode='auto') {
+function resolveTicker(query, mode='crypto') {
+  mode = 'crypto';   // 코인 전용 앱: 주식 경로 차단
   const q = query.trim().toLowerCase();
 
   if (mode === 'stock') {
@@ -1261,31 +1255,26 @@ async function fetchBybitKlines(symbol, interval='1d', limit=300) {
   }
 }
 
+const _symCache = {};
 async function resolveBinanceSymbol(query) {
   const q = query.trim().toLowerCase();
   if (BINANCE_SYMBOL_MAP[q]) return BINANCE_SYMBOL_MAP[q];
-  // Try to get the symbol via CoinGecko search, then append USDT
-  try {
-    const coinId = await searchCoinId(query);
-    // Try coinId directly as symbol
-    const sym = coinId.replace(/-/g,'').toUpperCase();
-    // Quick test if symbol exists on Binance
-    const testUrl = `${BINANCE_BASE}/klines?symbol=${sym}USDT&interval=1d&limit=1`;
-    const r = await fetch(testUrl, {signal: AbortSignal.timeout(4000)});
-    if (r.ok) {
+  if (_symCache[q]) return _symCache[q];
+  const exists = async sym => {
+    try {
+      const r = await fetch(`${BINANCE_BASE}/klines?symbol=${sym}&interval=1d&limit=1`, {signal: AbortSignal.timeout(4000)});
+      if (!r.ok) return false;
       const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) return sym + 'USDT';
-    }
-    // Try the raw query as symbol
-    const rawSym = query.trim().toUpperCase();
-    const testUrl2 = `${BINANCE_BASE}/klines?symbol=${rawSym}USDT&interval=1d&limit=1`;
-    const r2 = await fetch(testUrl2, {signal: AbortSignal.timeout(4000)});
-    if (r2.ok) {
-      const d2 = await r2.json();
-      if (Array.isArray(d2) && d2.length > 0) return rawSym + 'USDT';
-    }
+      return Array.isArray(d) && d.length > 0;
+    } catch { return false; }
+  };
+  const direct = query.trim().toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/USDT$/,'') + 'USDT';
+  if (await exists(direct)) return _symCache[q] = direct;
+  try {
+    const viaCg = (await searchCoinId(query)).replace(/-/g,'').toUpperCase() + 'USDT';
+    if (viaCg !== direct && await exists(viaCg)) return _symCache[q] = viaCg;
   } catch {}
-  return query.trim().toUpperCase() + 'USDT';
+  return direct;
 }
 
 async function fetchOHLCVForTimeframe(query, tfCfg, mode='auto') {
@@ -1302,11 +1291,7 @@ async function fetchOHLCVForTimeframe(query, tfCfg, mode='auto') {
     // 2) Binance Futures
     try { return await fetchBinanceFuturesKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit); }
     catch(e) { errors.push('Futures: ' + e.message); }
-    // 3) CoinGecko
-    try {
-      const coinId = CRYPTO_MAP[query.trim().toLowerCase()] || await searchCoinId(query);
-      return await fetchCryptoOHLCV(coinId, 180);
-    } catch(e) { errors.push('CoinGecko: ' + e.message); }
+    // (CoinGecko OHLC는 장기 요청 시 4일봉·거래량 0이라 폴백에서 제외)
     // 4) OKX
     try { return await fetchOKXKlines(sym, tfCfg.binanceInterval, tfCfg.binanceLimit); }
     catch(e) { errors.push('OKX: ' + e.message); }
@@ -1448,7 +1433,12 @@ async function fetchCryptoPrice(coinId) {
   } catch { return null; }
 }
 
-async function fetchCurrentPrice(query, mode='auto') {
+async function fetchCurrentPrice(query, mode='crypto') {
+  try {
+    const sym = await resolveBinanceSymbol(query);
+    const r = await fetch(`${BINANCE_BASE}/ticker/price?symbol=${sym}`, {signal: AbortSignal.timeout(5000)});
+    if (r.ok) { const j = await r.json(); if (+j.price > 0) return +j.price; }
+  } catch {}
   let {ticker, type} = resolveTicker(query, mode);
   if (type === 'crypto') {
     if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
@@ -1472,17 +1462,12 @@ async function fetchOHLCV(query, range='6mo', mode='auto') {
     const daysMap  = {'1mo':30,'3mo':90,'6mo':180,'1y':365,'2y':730,'5y':1825};
     const days = daysMap[range] || 180;
     const sym = BINANCE_SYMBOL_MAP[query.trim().toLowerCase()] || query.trim().toUpperCase()+'USDT';
-    const spotP = resolveBinanceSymbol(query).then(s=>fetchBinanceKlines(s,'1d',limit));
-    const futP  = fetchBinanceFuturesKlines(sym,'1d',limit);
-    try { result = await Promise.race([spotP.catch(()=>futP), futP.catch(()=>spotP)]); }
-    catch {
-      try {
-        if (!CRYPTO_MAP[query.trim().toLowerCase()]) ticker = await searchCoinId(query);
-        result = await fetchCryptoOHLCV(ticker, days);
-      } catch {
-        try { result = await fetchOKXKlines(sym,'1d',limit); }
-        catch { result = await fetchBybitKlines(sym,'1d',limit); }
-      }
+    try {
+      result = await resolveBinanceSymbol(query).then(s => fetchBinanceKlines(s,'1d',limit))
+        .catch(() => fetchBinanceFuturesKlines(sym,'1d',limit));      // 현물 실패 시에만 선물
+    } catch {
+      try { result = await fetchOKXKlines(sym,'1d',limit); }
+      catch { result = await fetchBybitKlines(sym,'1d',limit); }
     }
   } else {
     result = await fetchYahooOHLCV(ticker, range);
@@ -2225,9 +2210,12 @@ async function analyzeFull(query, apiKey, onStep, mode='auto') {
   try {
     p1 = await fetchAnalysisPhase1(query, mode, '1d');
   } catch(e) {
-    onStep && onStep('fallback', -1);
-    const r = await analyzeDirectly(query, apiKey);
-    r._dataError = `가격 데이터 수집 실패 (${e.message}). 텍스트 기반 분석으로 대체합니다.`;
+    throw new Error(`가격 데이터 수집 실패: ${e.message}`);
+  }
+  if (!apiKey && !PROXY_URL) {
+    const r = buildLocalReport(p1);
+    r.summary = 'AI 해설은 ⚙️에서 Google API 키를 넣으면 추가됩니다.';
+    r._query = query;
     return r;
   }
   onStep && onStep('report', 4);
@@ -3180,7 +3168,7 @@ function toTvSymbol(ticker, query='') {
   const cgToBinance = {
     'bitcoin':'BTCUSDT','ethereum':'ETHUSDT','solana':'SOLUSDT','ripple':'XRPUSDT',
     'binancecoin':'BNBUSDT','dogecoin':'DOGEUSDT','cardano':'ADAUSDT',
-    'avalanche-2':'AVAXUSDT','matic-network':'MATICUSDT','chainlink':'LINKUSDT',
+    'avalanche-2':'AVAXUSDT','matic-network':'POLUSDT','chainlink':'LINKUSDT',
     'polkadot':'DOTUSDT','cosmos':'ATOMUSDT','litecoin':'LTCUSDT','tron':'TRXUSDT',
     'shiba-inu':'SHIBUSDT','near':'NEARUSDT','aptos':'APTUSDT','sui':'SUIUSDT',
     'arbitrum':'ARBUSDT','optimism':'OPUSDT','the-open-network':'TONUSDT',
@@ -3344,7 +3332,7 @@ function ModeSelector({mode, onChange}) {
 // ─── Analysis Tab ─────────────────────────────────────────────────────────────
 function AnalysisTab({apiKey, settings, serverHasKey}) {
   const [query, setQuery]   = useState('');
-  const [mode, setMode]     = useState('auto'); // 'auto' | 'stock' | 'crypto'
+  const [mode, setMode]     = useState('crypto');   // 코인 전용
   const [loading, setLoading] = useState(false);
   const [step, setStep]     = useState('');
   const [report, setReport] = useState(null);
@@ -3376,7 +3364,6 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   async function handleAnalyze(queryVal, modeVal, tfArg) {
     const target = (queryVal||query).trim();
     if (!target) return;
-    if (!checkReady()) return;
     const effectiveMode = modeVal||mode;
     const tfId = (typeof tfArg === 'string' && tfArg) ? tfArg : '1d';
     setAnalysisTf(tfId); setLastTarget(target);
@@ -3395,16 +3382,26 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         p1 = await fetchAnalysisPhase1(target, effectiveMode, tfId);
         setPhase1(p1);
       } catch(e) {
-        // Data fetch failed → fall back to pure AI text analysis
-        setStep('report');
-        const r = await analyzeDirectly(target, apiKey);
-        r._dataError = `가격 데이터 수집 실패. 텍스트 기반 분석으로 대체합니다.`;
-        r._query = target;
-        setReport(r);
+        // 데이터 수집 실패 → AI 텍스트 분석으로 대체하지 않음 (차트 없이 판정을 지어내므로)
+        setError('가격 데이터를 가져오지 못했습니다 — 심볼을 확인해주세요 (예: BTC, ETH, PEPE). ' + (e.message||'').slice(0,160));
         return;
       } finally {
         setLoading(false);
         setStep('');
+      }
+
+      // 키가 없으면 AI 없이 지표 결과만 (프록시 사용 시는 키 없이도 AI 가능)
+      if (!apiKey && !PROXY_URL) {
+        const lr = buildLocalReport(p1);
+        lr._query = target;
+        lr.summary = 'AI 해설은 ⚙️에서 Google API 키를 넣으면 추가됩니다. 판정·점수·매매 플랜·포지션 전략은 키 없이 계산된 결과입니다.';
+        setReport(lr);
+        const entry = {date:new Date().toISOString(), ticker:lr.ticker, position:lr.position, confidence:lr.confidence, stance:lr.stance, summary:lr.summary,
+          tf:tfId, score:lr.score, price:lr.price, entry:lr.computed?.tradePlan?.entry1, stop:lr.stop_loss, tp1:lr.target_price};
+        const prev = ls_get('cs_logs')||[];
+        ls_set('cs_logs', [...prev.slice(-99), entry]);
+        setLogs(prev => [...prev.slice(-99), entry]);
+        return;
       }
 
       // ── Phase 2: async AI analysis ───────────────────────────────
@@ -3471,7 +3468,6 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         <div className="card-title">📊 종목 분석</div>
 
         {/* 모드 선택 */}
-        <ModeSelector mode={mode} onChange={m=>{setMode(m);setError('');}}/>
 
         {/* 빠른 선택 티커 */}
         <div className="quick-tickers">
@@ -3606,7 +3602,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
 
 // ─── Compare Tab ──────────────────────────────────────────────────────────────
 function CompareTab({apiKey, serverHasKey}) {
-  const [tickers, setTickers] = useState(['AAPL','NVDA']);
+  const [tickers, setTickers] = useState(['BTC','ETH']);
   const [input, setInput]     = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
@@ -3622,7 +3618,6 @@ function CompareTab({apiKey, serverHasKey}) {
   const removeTicker = t => setTickers(prev=>prev.filter(x=>x!==t));
 
   const runCompare = async () => {
-    if(!serverHasKey && !apiKey) { setError('API 키가 필요합니다.'); return; }
     if(tickers.length<2) { setError('최소 2개 종목이 필요합니다.'); return; }
     setLoading(true); setError(''); setResults([]);
     try {
@@ -3647,7 +3642,7 @@ function CompareTab({apiKey, serverHasKey}) {
           ))}
         </div>
         <div style={{display:'flex',gap:8,marginBottom:12}}>
-          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="종목 추가 (예: TSLA)"
+          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="코인 추가 (예: SOL)"
             onKeyDown={e=>e.key==='Enter'&&addTicker()} style={{flex:1}}/>
           <button className="btn-secondary" onClick={addTicker}>추가</button>
           <button className="btn-primary" onClick={runCompare} disabled={loading||tickers.length<2}>비교 분석</button>
@@ -3780,8 +3775,8 @@ function PerformanceTab({apiKey, serverHasKey}) {
 
 // ─── Backtest Tab ─────────────────────────────────────────────────────────────
 function BacktestTab() {
-  const [query, setQuery]   = useState('AAPL');
-  const [period, setPeriod] = useState('6mo');
+  const [query, setQuery]   = useState('BTC');
+  const [period, setPeriod] = useState('1y');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError]   = useState('');
@@ -4010,7 +4005,7 @@ function PortfolioTab() {
           <div style={{maxWidth:400}}>
             <div className="settings-group">
               <label>티커</label>
-              <input value={form.ticker} onChange={e=>setForm(f=>({...f,ticker:e.target.value}))} placeholder="예: AAPL, 005930.KS, BTC"/>
+              <input value={form.ticker} onChange={e=>setForm(f=>({...f,ticker:e.target.value}))} placeholder="예: BTC, ETH, SOL"/>
             </div>
             <div className="settings-group">
               <label>수량</label>
@@ -4151,7 +4146,7 @@ function MonitorTab({apiKey, settings, serverHasKey}) {
         </div>
 
         <div style={{display:'flex',gap:8,marginBottom:12}}>
-          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="감시 종목 추가 (예: AAPL, BTC)"
+          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="감시 코인 추가 (예: BTC, ETH)"
             onKeyDown={e=>e.key==='Enter'&&addTicker()} style={{flex:1}}/>
           <button className="btn-secondary" onClick={addTicker}>추가</button>
           <button className="btn-secondary" onClick={fetchAllPrices} disabled={!watchlist.length}>🔄</button>
@@ -4268,7 +4263,7 @@ function ApiKeyModal({onSave, onSkip}) {
           style={{marginBottom:12}} onKeyDown={e=>e.key==='Enter'&&key&&onSave(key)}/>
         <div style={{display:'flex',gap:8}}>
           <button className="btn-primary" style={{flex:1}} onClick={()=>onSave(key)} disabled={!key.trim()}>저장하고 시작</button>
-          <button className="btn-secondary" onClick={onSkip}>나중에 설정</button>
+          <button className="btn-secondary" onClick={onSkip}>키 없이 사용 (지표 분석만)</button>
         </div>
       </div>
     </div>
@@ -4325,7 +4320,7 @@ function App() {
       <div className="app-header">
         <div>
           <h1>{APP_TITLE}</h1>
-          <div className="subtitle">AI 차트 분석 · Google Gemini · 서버 불필요</div>
+          <div className="subtitle">코인 차트 분석 · 지표 판정 + Gemini 해설 · 서버 불필요</div>
         </div>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           {statusBadge}
