@@ -731,44 +731,15 @@ function collectLevels(price, a, src) {
   return {supports, resistances};
 }
 
-// 롱/숏 분기 매매 플랜: 진입=현재가 근처 레벨, 손절=ATR·스윙 중 가까운 쪽, 목표=구조 레벨 또는 R배수
-function buildTradePlan(dir, price, a, levels, swing, fibExts) {
-  const side = dir==='long' ? 1 : -1;
-  const near = (dir==='long' ? levels.supports : levels.resistances)
-    .filter(l => { const d = Math.abs(l.price-price); return d >= 0.15*a && d <= 3*a; });
-  const entryMode = near.length ? 'limit' : 'market';
-  const entry1 = near.length ? near[0].price : price;
-  const e2c = near.find(l => Math.abs(l.price-entry1) >= 0.5*a);
-  let entry2 = e2c ? e2c.price : entry1 - side*a;
-
-  const atrStop = entry1 - side*1.5*a;
-  const swList = dir==='long' ? swing.lows : swing.highs;
-  const cand = [atrStop];
-  const sw = swList.filter(p => dir==='long' ? p.price < entry1 - 0.3*a : p.price > entry1 + 0.3*a)
-                   .sort((x,y)=> dir==='long' ? y.price-x.price : x.price-y.price)[0];
-  if (sw) cand.push(sw.price - side*0.2*a);
-  const valid = cand.filter(s => Math.abs(entry1-s) >= 0.8*a);
-  let stopLoss = (valid.length ? valid : [atrStop]).sort((x,y)=>Math.abs(entry1-x)-Math.abs(entry1-y))[0];
-  if (stopLoss <= 0) stopLoss = entry1 * 0.5;
-  // 2차 진입가는 손절선보다 최소 0.3 ATR 안쪽이어야 함 — 아니면 진입1과 손절 사이(최대 1 ATR)로
-  if (side*(entry2 - stopLoss) < 0.3*a) entry2 = entry1 - side*Math.min(a, 0.5*Math.abs(entry1 - stopLoss));
-  const R = Math.abs(entry1 - stopLoss);
-
-  const targets = [
-    ...(dir==='long' ? levels.resistances : levels.supports).map(l=>l.price),
-    ...fibExts.map(f=>f.price),
-    ...(dir==='long' ? swing.highs : swing.lows).map(p=>p.price),
-  ].filter(p => p>0 && side*(p-entry1) > 0).sort((x,y)=>side*(x-y));
-  const pickT = (minR, floorPrice, fallbackR) => {
-    const t = targets.find(p => side*(p-entry1) >= minR*R && (floorPrice==null || side*(p-floorPrice) >= 0.5*R));
-    return t != null ? t : entry1 + side*fallbackR*R;
-  };
-  const profit1 = pickT(1.2, null, 1.5);
-  const profit2 = pickT(2.2, profit1, 2.5);
-  const profit3 = pickT(3.5, profit2, 4);
-  const rr = p => R>0 ? Math.abs(p-entry1)/R : null;
-  return {direction:dir, entryMode, entry1, entry2, stopLoss, profit1:Math.max(profit1,0), profit2:Math.max(profit2,0), profit3:Math.max(profit3,0),
-          rr1:rr(profit1), rr2:rr(profit2), rr3:rr(profit3), atr:a, riskPct:R/entry1*100};
+// 매매 플랜: 판정이 롱이면 다음 봉 시가에 진입, 초기 손절 = 진입가 − 3×ATR,
+// 이후 손절 = 진입 후 최고 종가 − 3×ATR (올리기만), 고정 익절 없음.
+// 54개 코인(상장폐지 포함)·2020~2026 포트폴리오 검증에서 옛 '눌림 지정가 + 고정 익절' 플랜보다
+// 모든 시험(BTC·ETH 단일, 포트폴리오, 학습·검증 구간)에서 나았다. 고정 익절은 큰 상승을 잘라 성과를 깎았다.
+const TRAIL_MULT = 3;
+function buildTrailPlan(price, a) {
+  const stopLoss = price - TRAIL_MULT * a;
+  return {direction: 'long', planType: 'trail', entryMode: 'market', entry1: price, stopLoss,
+          trailMult: TRAIL_MULT, atr: a, riskPct: TRAIL_MULT * a / price * 100};
 }
 
 // 규칙 기반 점수 (-100 ~ +100): 포지션/신뢰도는 AI가 아니라 이 점수가 결정
@@ -973,7 +944,7 @@ function computeTechIndicators(ohlcv, opts={}) {
 
   const levels = collectLevels(price, atrV, {maSet, bb:bbLast, fibs, swing, rounds});
   const sc = computeScore({price, closes, ohlcv, maSet, macd, rsiV:rsi14v, bb:bbLast, atrPct});
-  const tradePlan = buildTradePlan('long', price, atrV, levels, swing, fibExts);   // 숏 플랜은 제공하지 않음
+  const tradePlan = buildTrailPlan(price, atrV);   // 롱 전용 · 추적 손절 플랜
   const facts = buildFacts({ohlcv, closes, maSet, macd, rsiArr, swing, atrV, price, P});
 
   const vols = ohlcv.map(d=>d.volume||0);
@@ -1028,11 +999,9 @@ function buildPositionAdvice(inp, ctx) {
   const accountPct = marginPct * w;                             // 계좌 영향
   const exposurePct = weightPct * lev;                          // 실질 노출 (총자산 대비)
 
-  // 보호 손절선: 보유 방향의 반대쪽에서 0.8 ATR 이상 떨어진 가장 가까운 레벨 ± 0.2 ATR, 없으면 1.5 ATR
-  const pool = side > 0 ? levels.supports : levels.resistances;
-  const lv = pool.find(l => Math.abs(l.price - price) >= 0.8 * a);
-  const stop = lv ? lv.price - side * 0.2 * a : price - side * 1.5 * a;
-  const stopSrc = lv ? lv.src : '1.5 ATR';
+  // 보호 손절선: 검증한 매매 규칙과 같은 3 ATR 추적 손절 (보유 중 최고 종가를 모르므로 현재가 기준)
+  const stop = price - side * TRAIL_MULT * a;
+  const stopSrc = `현재가 ${side > 0 ? '−' : '+'} 3 ATR`;
   const stopMovePct = side * (stop / price - 1) * 100;          // 지금부터 손절까지 (음수)
   const accountAtStop = side * (stop / avg - 1) * 100 * lev * w; // 손절 시 계좌 손익(평단 기준)
   const riskFromNow = Math.abs(stopMovePct) * lev * w;           // 지금부터 손절까지 추가 손실(계좌 %)
@@ -1050,8 +1019,6 @@ function buildPositionAdvice(inp, ctx) {
     liqTooClose = side > 0 ? liq > stop - a : liq < stop + a;      // 청산가가 '손절선 바깥 1 ATR' 안쪽 = 안전 레버리지 초과
   }
 
-  // 익절 후보: 보유 방향 쪽의 가까운 레벨 2개
-  const targets = (side > 0 ? levels.resistances : levels.supports).slice(0, 2);
 
   const tips = [];   // {lv: 'danger'|'warn'|'info'|'ok', text}
   if (futures && liqBeforeStop) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 보호 손절선(${fmtN(stop)})보다 먼저 옵니다. 손절이 작동하기 전에 청산됩니다 → 레버리지를 ${safeLev ? safeLev + '배 이하로' : '크게'} 낮추거나 증거금을 추가하세요.`});
@@ -1066,23 +1033,19 @@ function buildPositionAdvice(inp, ctx) {
   const inProfit = movePct > 0.1, inLoss = movePct < -0.1;   // ±0.1%는 본전
   if (side > 0) {
     if (stance === 'long') {
-      tips.push({lv:'ok', text:`지표 판정 롱 — 보유 유지 구간입니다. 보호 손절선 ${fmtN(stop)}(${stopSrc})을 지키세요.`});
-      if (inProfit && targets[0] && Math.abs(targets[0].price - price) <= a) tips.push({lv:'info', text:`가까운 저항 ${fmtN(targets[0].price)}(${targets[0].src})이 1 ATR 이내입니다 — 일부 익절을 고려할 만합니다.`});
-      if (!inProfit && plan && Math.abs(price - plan.entry1) <= 0.5 * a && riskFromNow <= ACCOUNT_RISK_LIMIT)
-        tips.push({lv:'info', text:`현재가가 매매 플랜 진입가 부근입니다. 추가 매수는 추가 후에도 손절 시 계좌 손실이 ${ACCOUNT_RISK_LIMIT}% 이내일 때만 고려하세요.`});
+      tips.push({lv:'ok', text:`지표 판정 롱 — 보유 유지 구간입니다. 고정 익절 없이 추적 손절(최고 종가 − 3 ATR, 지금 기준 ${fmtN(stop)})에 걸릴 때 청산하는 것이 검증된 규칙입니다.`});
     } else if (stance === 'neutral') {
       tips.push({lv:'info', text:'지표 판정 관망 — 보유는 유지하되 추가 매수(물타기)는 보류하세요.'});
     } else if (stance === 'avoid') {
-      tips.push({lv:'warn', text:`지표 판정 매수 회피(하락 우위) — 추가 매수 금지, 비중 축소를 고려하세요.${inProfit ? ' 수익 구간이면 일부 익절이 합리적입니다.' : ' 손절선 이탈 시 지체 없이 정리하세요.'}`});
+      tips.push({lv:'warn', text:'지표 판정 매수 회피(하락 우위) — 추가 매수 금지. 추적 손절선을 지키고, 이탈 시 지체 없이 정리하세요.'});
     } else if (stance === 'bear') {
       tips.push({lv:'warn', text:'BTC가 200일선 아래(하락장 필터) — 과거 하락장에서 롱 신호는 손실이었습니다. 레버리지·비중을 낮추고 추가 매수를 보류하세요.'});
     }
-    if (inProfit && price - avg > 1.5 * a) tips.push({lv:'info', text:`평단 대비 ${((price-avg)/a).toFixed(1)} ATR 수익 — 손절선을 평단(${fmtN(avg)}) 근처로 올려 본전 이상을 확보하는 방법이 있습니다.`});
+    if (stop > avg) tips.push({lv:'info', text:`추적 손절선(${fmtN(stop)})이 평단(${fmtN(avg)})보다 위입니다 — 손절에 걸려도 수익으로 끝나는 구간입니다.`});
     if (inLoss && stance !== 'long') tips.push({lv:'warn', text:'손실 구간 + 롱 판정 아님 — 평단을 낮추려는 추가 매수(물타기)는 손실을 키울 수 있습니다.'});
   } else {
     tips.push({lv:'info', text:'숏 포지션: 이 앱의 하락 신호는 과거 검증에서 예측력이 없어 방향 조언은 하지 않고 리스크 관리만 제시합니다.'});
     if (stance === 'long') tips.push({lv:'warn', text:`지표는 상승 우위(롱)로 보유 방향과 반대입니다. 손절선 ${fmtN(stop)}(${stopSrc})을 엄수하고 비중 축소를 고려하세요.`});
-    if (inProfit && targets[0]) tips.push({lv:'info', text:`가까운 지지 ${fmtN(targets[0].price)}(${targets[0].src}) 부근에서 일부 익절을 고려할 수 있습니다.`});
   }
   // 펀딩비: 종목별 정산 주기(보통 8시간, 일부 4·1시간)마다 정산. 양수면 롱이 지급, 음수면 숏이 지급. 증거금 대비 하루 비용(+면 지급)
   const fundDaily = futures && funding != null ? side * funding * (24 / fundingIntervalH) * lev * 100 : null;
@@ -1095,11 +1058,11 @@ function buildPositionAdvice(inp, ctx) {
   const sev = tips.some(t=>t.lv==='danger') ? 'danger' : tips.some(t=>t.lv==='warn') ? 'warn' : 'ok';
   const headline = futures && (liqBeforeStop || liqTooClose) ? '레버리지 축소 필요 (청산 위험)'
     : riskFromNow > ACCOUNT_RISK_LIMIT ? '비중 축소 권장'
-    : side > 0 && (stance === 'avoid' || stance === 'bear') ? (inProfit ? '일부 익절 · 비중 축소 고려' : '추가 매수 금지 · 손절선 엄수')
+    : side > 0 && (stance === 'avoid' || stance === 'bear') ? '추가 매수 금지 · 추적 손절 엄수'
     : side > 0 && stance === 'long' ? '보유 유지 · 손절선 관리'
     : '보유 유지 · 추가 매수 보류';
   return {side, lev, futures, movePct, marginPct, accountPct, exposurePct, stop, stopSrc, stopMovePct, accountAtStop, riskFromNow,
-          liq, liqDistPct, liqAtr, liqBeforeStop, safeLev, targets, tips, sev, headline, mmr, fundDaily, funding};
+          liq, liqDistPct, liqAtr, liqBeforeStop, safeLev, tips, sev, headline, mmr, fundDaily, funding};
 }
 function fmtN(v) { return v==null||isNaN(v) ? '—' : Math.abs(v)>=1 ? Number(v).toLocaleString(undefined,{maximumFractionDigits:2}) : Number(v).toPrecision(4); }
 
@@ -1113,8 +1076,33 @@ const loadFee = () => { const v = ls_get('cs_fee', 0.002); return FEE_OPTIONS.so
 const feeInR = (t, fee) => fee > 0 && t.riskPct > 0 ? fee / t.riskPct : 0;
 const netR = (t, fee) => t.R - feeInR(t, fee);
 
-// log: {price, entry, stop, tp1, entryMode, stance|position}, bars: 기록 시점 이후의 완성된 캔들(오름차순)
-function gradeLog(log, bars) {
+// 추적 손절 플랜 채점: 다음 봉 시가 체결 → 장중 저가가 손절에 닿으면 청산(갭이면 시가) →
+// 종가마다 ATR(Wilder)과 최고 종가를 갱신해 손절을 올림. 포트폴리오 시뮬레이터(B1)와 같은 규칙.
+function trailTrade(log, bars, closeAtEnd) {
+  if (!bars.length) return {state: 'waiting', barsSeen: 0};
+  const m = log.trailMult || TRAIL_MULT;
+  const fill = bars[0].open;
+  let atr = log.atr, stop = fill - m * atr, hi = fill, prev = log.price;
+  const risk = fill - stop, riskPct = risk / fill;
+  if (!(risk > 0)) return {state: 'noplan'};
+  for (let k = 0; k < bars.length; k++) {
+    const b = bars[k];
+    if (b.low <= stop) {
+      const px = k > 0 && b.open < stop ? b.open : stop;
+      return {state: 'exit', R: (px - fill) / risk, bars: k, fill, riskPct, exitPx: px};
+    }
+    const tr = Math.max(b.high - b.low, Math.abs(b.high - prev), Math.abs(b.low - prev));
+    atr = (atr * 13 + tr) / 14; prev = b.close;
+    hi = Math.max(hi, b.close); stop = Math.max(stop, hi - m * atr);
+  }
+  const last = bars[bars.length - 1].close;
+  return closeAtEnd
+    ? {state: 'timeout', R: (last - fill) / risk, bars: bars.length, fill, riskPct, markToMarket: true}
+    : {state: 'open', R: (last - fill) / risk, bars: bars.length, fill, riskPct, stop};
+}
+
+// log: {price, entry, stop, (tp1 | planType:'trail', atr), entryMode, stance|position}, bars: 기록 시점 이후의 완성된 캔들(오름차순)
+function gradeLog(log, bars, opts = {}) {
   const {fillWait, holdMax, fwdBars} = GRADE_RULES;
   const out = {fwd: null, fwdPending: true, trade: {state: 'n/a'}, final: false};
 
@@ -1125,6 +1113,7 @@ function gradeLog(log, bars) {
   const isLong = (log.stance || log.position) === 'long';
   const hasPlan = log.entry > 0 && log.stop > 0 && log.tp1 > 0 && log.stop < log.entry && log.tp1 > log.entry;
   if (!isLong) out.trade = {state: 'n/a'};
+  else if (log.planType === 'trail') out.trade = log.atr > 0 ? trailTrade(log, bars, opts.closeAtEnd) : {state: 'noplan'};
   else if (!hasPlan) out.trade = {state: 'noplan'};
   else {
     const mode = log.entryMode || (log.price && Math.abs(log.entry/log.price - 1) < 0.001 ? 'market' : 'limit');
@@ -1158,7 +1147,7 @@ function gradeLog(log, bars) {
       }
     }
   }
-  const tradeDone = ['n/a','noplan','unfilled','stop','tp','timeout'].includes(out.trade.state);
+  const tradeDone = ['n/a','noplan','unfilled','stop','tp','timeout','exit'].includes(out.trade.state);
   out.final = tradeDone && !out.fwdPending;
   return out;
 }
@@ -1166,7 +1155,7 @@ function gradeLog(log, bars) {
 // 채점된 기록들 요약
 function summarizeGrades(logs, fee = 0) {
   const g = logs.filter(l => l.grade);
-  const trades = g.map(l => l.grade.trade).filter(t => ['tp','stop','timeout'].includes(t.state));
+  const trades = g.map(l => l.grade.trade).filter(t => ['tp','stop','timeout','exit'].includes(t.state));
   const R = trades.map(t => t.R);
   const byStance = {};
   g.forEach(l => {
@@ -1179,8 +1168,8 @@ function summarizeGrades(logs, fee = 0) {
   }));
   return {
     graded: g.length, final: g.filter(l => l.grade.final).length,
-    trades: trades.length, wins: trades.filter(t => t.state==='tp').length,
-    stops: trades.filter(t => t.state==='stop').length, timeouts: trades.filter(t => t.state==='timeout').length,
+    trades: trades.length, wins: trades.filter(t => t.R > 0).length,
+    stops: trades.filter(t => !(t.R > 0)).length, timeouts: trades.filter(t => t.state==='timeout').length,
     open: g.filter(l => l.grade.trade.state==='open').length,
     waiting: g.filter(l => l.grade.trade.state==='waiting').length,
     unfilled: g.filter(l => l.grade.trade.state==='unfilled').length,
@@ -1202,13 +1191,45 @@ function verdictSampleAt(bars, t, opts) {
   const regime = opts.regimeAt ? opts.regimeAt(bars[t].t) : null;
   const c = computeTechIndicators(bars.slice(t - W + 1, t + 1), {tf: opts.tf, price: bars[t].close, regime, market: 'crypto'});
   const p = c.tradePlan, stance = c.verdict.stance;
-  const base = {price: bars[t].close, entry: p.entry1, stop: p.stopLoss, tp1: p.profit1, entryMode: p.entryMode};
-  const after = bars.slice(t + 1, t + 1 + GRADE_RULES.fillWait + GRADE_RULES.holdMax + 5);
+  const base = {price: bars[t].close, entry: p.entry1, stop: p.stopLoss, entryMode: p.entryMode, planType: p.planType, atr: p.atr, trailMult: p.trailMult};
+  const after = bars.slice(t + 1);
   return {
-    i: t, t: bars[t].t, score: c.score, stance,
-    grade: gradeLog({...base, stance}, after),                 // 앱 판정대로 (롱일 때만 진입)
-    always: gradeLog({...base, stance: 'long'}, after),        // 대조군: 판정 무시하고 항상 진입
+    i: t, t: bars[t].t, score: c.score, stance, atr: p.atr,
+    grade: gradeLog({...base, stance}, after, {closeAtEnd: true}),                 // 앱 판정대로 (롱일 때만 진입)
+    always: gradeLog({...base, stance: 'long'}, after, {closeAtEnd: true}),        // 대조군: 판정 무시하고 항상 진입
   };
+}
+
+// 단일 코인 계좌 시뮬레이션: 매 봉 판정을 보고 롱이면 다음 봉 시가에 전액 진입, 추적 손절로 청산.
+// "같은 기간 그냥 보유"와 연수익·최대 낙폭·샤프를 비교한다. samples는 매 봉(간격 1) 판정이어야 한다.
+function equityMetrics(eq, barsPerYear) {
+  if (eq.length < 2) return null;
+  const rets = eq.slice(1).map((x, i) => x.v / eq[i].v - 1);
+  const fin = eq[eq.length-1].v / eq[0].v, yrs = eq.length / barsPerYear;
+  let peak = 0, mdd = 0; eq.forEach(x => { peak = Math.max(peak, x.v); mdd = Math.min(mdd, x.v / peak - 1); });
+  const m = rets.reduce((a,b)=>a+b,0) / rets.length, sd = Math.sqrt(rets.reduce((a,b)=>a+(b-m)**2,0) / (rets.length-1));
+  return {cagr: Math.pow(fin, 1/yrs) - 1, mdd, sharpe: sd ? m / sd * Math.sqrt(barsPerYear) : 0, final: fin};
+}
+function simulateEquity(bars, samples, costSide, barsPerYear) {
+  const byI = new Map(samples.map(s => [s.i, s]));
+  const first = samples[0].i, last = samples[samples.length-1].i;
+  if (last <= first + 1) return null;
+  let cash = 1, units = 0, inPos = false, stop = 0, hi = 0, fillI = -1, trades = 0, inBars = 0;
+  let pendingAtr = byI.get(first).stance === 'long' ? byI.get(first).atr : null;
+  const holdUnits = (1 - costSide) / bars[first+1].open;
+  const eq = [], hold = [];
+  for (let i = first + 1; i <= last; i++) {
+    const b = bars[i];
+    if (pendingAtr != null && !inPos) { units = cash * (1 - costSide) / b.open; cash = 0; stop = b.open - TRAIL_MULT * pendingAtr; hi = b.open; inPos = true; fillI = i; trades++; }
+    pendingAtr = null;
+    if (inPos && b.low <= stop) { const px = i > fillI && b.open < stop ? b.open : stop; cash = units * px * (1 - costSide); units = 0; inPos = false; }
+    const s = byI.get(i);
+    if (inPos) { inBars++; hi = Math.max(hi, b.close); if (s && s.atr) stop = Math.max(stop, hi - TRAIL_MULT * s.atr); }
+    eq.push({t: b.t, v: cash + units * b.close});
+    hold.push({t: b.t, v: holdUnits * b.close});
+    if (!inPos && s && s.stance === 'long') pendingAtr = s.atr;
+  }
+  return {strat: {...equityMetrics(eq, barsPerYear), trades, exposure: inBars / eq.length}, hold: equityMetrics(hold, barsPerYear), eq, holdEq: hold};
 }
 
 function summarizeBacktest(samples, step, fee = 0) {
@@ -1216,15 +1237,16 @@ function summarizeBacktest(samples, step, fee = 0) {
   const median = a => { if (!a.length) return null; const s=[...a].sort((x,y)=>x-y); return s[s.length>>1]; };
   const fwdStats = arr => { const a = arr.map(s => s.grade.fwd).filter(v => v != null);
     return {n: a.length, avg: mean(a), med: median(a), up: a.length ? a.filter(x=>x>0).length/a.length : null}; };
-  const done = s => ['tp','stop','timeout'].includes(s.state);
+  const done = s => ['tp','stop','timeout','exit'].includes(s.state);
   const tradeStats = (arr, key) => {
     const tr = arr.map(s => s[key].trade).filter(done);
     const R = tr.map(t => t.R), N = tr.map(t => netR(t, fee));
-    // 겹치지 않는 표본으로 t값 — 거래는 체결 대기 + 보유로 최대 fillWait+holdMax 봉까지 이어지므로 그 간격 이상 떨어진 표본만 (수수료 차감 후 R 기준)
-    const gap = Math.max(1, Math.ceil((GRADE_RULES.fillWait + GRADE_RULES.holdMax) / step));
+    // 겹치지 않는 표본으로 t값 — 보유 기간(상위 25% 길이) 이상 떨어진 표본만 (수수료 차감 후 R 기준)
+    const held = tr.map(t => t.bars).sort((a,b) => a-b), p75 = held.length ? held[Math.floor(held.length*0.75)] : 0;
+    const gap = Math.max(1, Math.ceil(Math.max(GRADE_RULES.fwdBars, p75) / step));
     const nov = arr.filter((_, k) => k % gap === 0).map(s => s[key].trade).filter(done).map(t => netR(t, fee));
     const m = mean(nov), sd = nov.length > 1 ? Math.sqrt(nov.reduce((a,x)=>a+(x-m)**2,0)/(nov.length-1)) : null;
-    return {n: tr.length, wins: tr.filter(t=>t.state==='tp').length, stops: tr.filter(t=>t.state==='stop').length,
+    return {n: tr.length, wins: tr.filter(t=>t.R > 0).length, stops: tr.filter(t=>!(t.R > 0)).length, gapBars: gap * step,
             timeouts: tr.filter(t=>t.state==='timeout').length, avgR: mean(R), sumR: R.reduce((a,b)=>a+b,0),
             avgNetR: mean(N), sumNetR: N.reduce((a,b)=>a+b,0), avgFeeR: mean(tr.map(t => feeInR(t, fee))),
             medRiskPct: median(tr.map(t => t.riskPct).filter(x => x > 0)),
@@ -1255,8 +1277,8 @@ function buildLocalReport(p1) {
     signals: c.signals, signalsTone: c.signalsTone,
     support: c.levels.supports[0]?.price ?? null,
     resistance: c.levels.resistances[0]?.price ?? null,
-    target_price: c.tradePlan.profit1, stop_loss: c.tradePlan.stopLoss,
-    risk_level: c.riskLevel, time_horizon: P.horizon, setup_type: P.setup, market: p1.type, _local: true,
+    target_price: null, stop_loss: c.tradePlan.stopLoss,
+    risk_level: c.riskLevel, time_horizon: P.horizon, setup_type: P.setup, market: p1.type, rs: p1.rs || null, _local: true,
   };
 }
 
@@ -2265,8 +2287,9 @@ ${c.facts.map(x=>'- '+x).join('\n')}
 저항: ${lv(c.levels.resistances)}
 
 [매매 플랜 (로컬 계산, 롱 시나리오${c.verdict.stance==='long' ? '' : ' — 현재 판정이 롱이 아니므로 참고용 조건부'})]
-진입1 ${f(plan.entry1)} (${plan.entryMode==='market'?'현재가 부근':'지정가'}) / 진입2 ${f(plan.entry2)} / 손절 ${f(plan.stopLoss)} (리스크 ${plan.riskPct.toFixed(2)}%)
-익절1 ${f(plan.profit1)} (R:R ${plan.rr1?.toFixed(2)}) / 익절2 ${f(plan.profit2)} (R:R ${plan.rr2?.toFixed(2)}) / 익절3 ${f(plan.profit3)} (R:R ${plan.rr3?.toFixed(2)})
+진입: 다음 봉 시가(≈ ${f(plan.entry1)}) / 초기 손절 ${f(plan.stopLoss)} (진입가 − 3×ATR, −${plan.riskPct.toFixed(2)}%)
+이후: 진입 후 최고 종가 − 3×ATR로 손절을 올림(추적 손절), 고정 익절 없음. 권장 비중: 손절 시 계좌 손실 1% 기준 총자산의 ${Math.min(100, 100/plan.riskPct).toFixed(0)}%
+(이 규칙은 2020~2026 검증에서 고정 익절 플랜보다 나았지만 2023~2026에는 BTC 단순 보유보다 수익이 낮았고 최대 낙폭은 작았음)
 
 [최근 ${rows.length}봉 OHLCV]  (일시 | 시가 고가 저가 종가 | 거래량/20봉평균)
 ${table}`,
@@ -2301,7 +2324,7 @@ ${ctx.text}
   "bollinger": "볼린저밴드 위치가 변동성·방향성에 대해 말하는 바.",
   "volume_analysis": "제공된 거래량 사실에 기반해 추세를 컨펌하는지 여부.",
   "technical": "지표를 종합한 가장 강력한 근거와 가장 큰 리스크, 시나리오별 핵심 조건.",
-  "recommendation": "제공된 매매 플랜(진입·손절·익절)을 어떻게 활용할지, 무효화 조건 포함."
+  "recommendation": "제공된 매매 플랜(진입·초기 손절·추적 손절)을 어떻게 활용할지, 무효화 조건 포함. 목표가를 새로 만들지 말 것."
 }`;
 
   const text = await callGemini(GEMINI_REPORT_MODEL, [{text: prompt}], apiKey, {temperature: 0.2});
@@ -2330,7 +2353,7 @@ async function fetchBtcRegime() {
   if (closes.length < 200) throw new Error('BTC 데이터 부족');
   const ma200 = closes.slice(-200).reduce((a,b)=>a+b,0)/200;
   const last = closes[closes.length-1];
-  return {btcAbove: last > ma200, btcPrice: last, btcMa200: ma200};
+  return {btcAbove: last > ma200, btcPrice: last, btcMa200: ma200, btcCloses: closes.slice(-120)};
 }
 
 // ─── Phase 1: 데이터 + 로컬 지표/점수/플랜 (AI 불필요, 즉시) ───────────────
@@ -2360,7 +2383,15 @@ async function fetchAnalysisPhase1(query, mode='auto', tfId='1d') {
     try { regime = await btcRegimeP; } catch { regime = {unknown: true}; }
   }
   const computed = computeTechIndicators(closed, {tf: tfCfg.id, price, regime, market: type});
-  return {ticker, type, ohlcv, candles: closed, price, computed, tfId: tfCfg.id};
+  // BTC 대비 90일 상대 성과 (참고용 · 판정에 미반영) — 2023~2026 알트 50개 중 47개가 BTC보다 부진했다
+  let rs = null;
+  const bc = regime?.btcCloses;
+  if (type === 'crypto' && tfCfg.id === '1d' && !/^BTC$/i.test(ticker) && bc && bc.length > 91 && closed.length > 91) {
+    const coin90 = closed[closed.length-1].close / closed[closed.length-91].close - 1;
+    const btc90 = bc[bc.length-1] / bc[bc.length-91] - 1;
+    rs = {coin90, btc90, rel: (1 + coin90) / (1 + btc90) - 1};
+  }
+  return {ticker, type, ohlcv, candles: closed, price, computed, tfId: tfCfg.id, rs};
 }
 
 // ─── Phase 2: AI는 해설 텍스트만 생성, 수치·포지션은 로컬 결과 유지 ──────────
@@ -2671,9 +2702,6 @@ function TradePlanSection({computed, report}) {
   const plan = computed?.tradePlan;
   if (!plan) return null;
   const ticker = report?.ticker;
-  const price = computed.price;
-  const isLong = plan.direction === 'long';
-  const side = isLong ? 1 : -1;
   const stance = stanceOf(report);
   if (stance === 'avoid') return (
     <div style={{background:'#0a0f1a',border:'1px solid #7f1d1d',borderRadius:10,padding:'14px 16px',marginBottom:12,fontSize:'.83rem',color:'#fca5a5',lineHeight:1.7}}>
@@ -2681,62 +2709,30 @@ function TradePlanSection({computed, report}) {
       <span style={{color:'#8794a8'}}>숏(공매도) 플랜은 제공하지 않습니다. 과거 검증(코인 10종, 2019~2026)에서 하락 신호의 예측력이 확인되지 않았습니다.</span>
     </div>
   );
-  const distPct = v => (v/price - 1) * 100;
-  const retPct  = v => side * (v/plan.entry1 - 1) * 100;
-
-  const rows = [
-    {label: plan.entryMode==='market' ? '진입 (현재가 부근)' : '진입 1차 (지정가)', val:plan.entry1, color:'#34d399', kind:'entry'},
-    {label: '진입 2차 (분할)', val:plan.entry2, color:'#34d399', kind:'entry'},
-    {label: '익절 1차', val:plan.profit1, rr:plan.rr1, color:'#4ade80', kind:'tp'},
-    {label: '익절 2차', val:plan.profit2, rr:plan.rr2, color:'#4ade80', kind:'tp'},
-    {label: '익절 3차', val:plan.profit3, rr:plan.rr3, color:'#4ade80', kind:'tp'},
-    {label: '손절',     val:plan.stopLoss,              color:'#f87171', kind:'sl'},
-  ].filter(r => r.val != null);
-
-  const th = {padding:'9px 12px',textAlign:'right',fontSize:'.74rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em',whiteSpace:'nowrap'};
-  const dirColor = isLong ? '#4ade80' : '#f87171';
-
+  if (plan.planType !== 'trail') return null;
+  const riskPct = plan.riskPct;                                   // 진입~초기 손절 (%)
+  const size1 = Math.min(100, 1 / riskPct * 100);                 // 계좌 1% 리스크 기준 비중
+  const Row = ({k, v, sub, color}) => (
+    <div style={{display:'grid',gridTemplateColumns:'minmax(110px,160px) 1fr',gap:10,padding:'10px 12px',borderBottom:'1px solid #0f172a',alignItems:'baseline'}}>
+      <span style={{color:'#94a3b8',fontSize:'.84rem',fontWeight:600}}>{k}</span>
+      <span><b style={{color:color||'#e2e8f0',fontFamily:'monospace',fontSize:'.95rem'}}>{v}</b>{sub && <span style={{color:'#8794a8',fontSize:'.78rem',marginLeft:8}}>{sub}</span>}</span>
+    </div>
+  );
   return (
     <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8,padding:'10px 12px',borderBottom:'1px solid #1e293b',background:'#0f172a'}}>
-        <span style={{fontWeight:800,fontSize:'.85rem',color:dirColor}}>{isLong ? '▲ 롱 플랜' : '▼ 숏 플랜'}</span>
-        {stance==='neutral' && <span style={{fontSize:'.74rem',color:'#fbbf24'}}>⚠ 관망 구간(점수 ±25 이내) — 참고용 조건부 시나리오입니다</span>}
-        {stance==='bear' && <span style={{fontSize:'.74rem',color:'#fb923c'}}>⚠ BTC가 200일선 아래 — 과거 하락장(2022)에서 롱 신호는 손실이었습니다. 진입 비권장</span>}
+        <span style={{fontWeight:800,fontSize:'.85rem',color:'#4ade80'}}>▲ 롱 플랜 · 추적 손절</span>
+        {stance==='neutral' && <span style={{fontSize:'.76rem',color:'#fbbf24'}}>⚠ 관망 구간(점수 ±25 이내) — 판정이 롱이 될 때만 진입하는 규칙입니다</span>}
+        {stance==='bear' && <span style={{fontSize:'.76rem',color:'#fb923c'}}>⚠ BTC가 200일선 아래 — 규칙상 진입하지 않는 구간입니다</span>}
       </div>
-      <div style={{overflowX:'auto'}}>
-      <table className="plan-table" style={{width:'100%',borderCollapse:'collapse',minWidth:420}}>
-        <thead>
-          <tr style={{borderBottom:'1px solid #1e293b'}}>
-            <th style={{...th,textAlign:'left'}}>레벨</th>
-            <th style={th}>가격</th>
-            <th className="col-sub" style={th}>현재가 대비</th>
-            <th className="col-sub" style={th}>R:R</th>
-            <th style={th}>예상 손익</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r,i)=>{
-            const d = distPct(r.val);
-            const ret = r.kind==='entry' ? null : retPct(r.val);
-            return (
-              <tr key={i} style={{borderBottom:'1px solid #0f172a',background:i%2===0?'#0a0f1a':'#0d1424'}}>
-                <td style={{padding:'10px 12px',color:r.color,fontWeight:700,fontSize:'.85rem',whiteSpace:'nowrap'}}>{r.label}
-                  <div className="mob-only">현재가 대비 {`${d>=0?'+':''}${d.toFixed(2)}%`}{r.rr!=null ? ` · R:R ${r.rr.toFixed(2)}` : ''}</div></td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',fontWeight:700,color:'#e2e8f0',fontSize:'.9rem'}}>{fmtPx(r.val,ticker)}</td>
-                <td className="col-sub" style={{padding:'10px 12px',textAlign:'right',fontSize:'.8rem',color:'#8794a8'}}>{`${d>=0?'+':''}${d.toFixed(2)}%`}</td>
-                <td className="col-sub" style={{padding:'10px 12px',textAlign:'right',fontSize:'.82rem',color:'#94a3b8'}}>{r.rr!=null ? r.rr.toFixed(2) : '—'}</td>
-                <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontSize:'.88rem',color:ret==null?'#8794a8':ret>=0?'#4ade80':'#f87171'}}>
-                  {ret==null ? '—' : `${ret>=0?'+':''}${ret.toFixed(2)}%`}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      </div>
-      <div style={{padding:'8px 12px',background:'#080d18',borderTop:'1px solid #1e293b',display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:6,fontSize:'.74rem',color:'#8794a8'}}>
-        <span>리스크(진입~손절) {plan.riskPct.toFixed(2)}% · ATR(14) {fmtPx(plan.atr,ticker)} · 손절은 ATR·스윙 중 가까운 쪽</span>
-        <span>설정 유형: <span style={{color:'#60a5fa',fontWeight:700}}>{report?.setup_type||'스윙 트레이드'}</span></span>
+      <Row k="진입" v={fmtPx(plan.entry1, ticker)} sub="판정이 롱인 봉의 다음 봉 시가 (≈ 현재가)"/>
+      <Row k="초기 손절" v={fmtPx(plan.stopLoss, ticker)} color="#fb923c" sub={`진입가 − 3×ATR (−${riskPct.toFixed(2)}%)`}/>
+      <Row k="추적 손절" v={`최고 종가 − 3×ATR`} sub={`현재 3 ATR = ${fmtPx(3*plan.atr, ticker)} · 손절선은 올리기만 함`}/>
+      <Row k="익절" v="없음" sub="추적 손절에 걸릴 때 청산 — 고정 익절은 큰 상승을 잘라 과거 성과를 깎았습니다"/>
+      <Row k="권장 비중" v={`총자산의 ${size1.toFixed(0)}%`} color="#93c5fd" sub={`손절 시 계좌 손실을 1%로 맞추는 비중 (1% ÷ ${riskPct.toFixed(2)}%)`}/>
+      <div style={{padding:'8px 12px',background:'#080d18',fontSize:'.76rem',color:'#8794a8',lineHeight:1.6}}>
+        이 규칙은 54개 코인(상장폐지 포함)·2020~2026 검증에서 기존 '눌림 지정가 + 고정 익절' 플랜보다 모든 시험에서 나았지만,
+        2023~2026에는 BTC를 그냥 보유하는 것보다 수익이 낮았습니다(대신 최대 낙폭이 작음). 위 "과거 성과" 카드를 함께 보세요.
       </div>
     </div>
   );
@@ -2813,8 +2809,8 @@ function ReportHero({report, aiPending}) {
       {report.computed?.tradePlan && (() => {
         const p = report.computed.tradePlan, sk = stanceOf(report), px = v => fmtPx(v, report.ticker);
         const text = sk==='long'
-          ? <>진입 <b>{px(p.entry1)}</b>{p.entryMode==='market'?' (현재가 부근)':' (지정가)'} · 손절 <b style={{color:'#fb923c'}}>{px(p.stopLoss)}</b> · 1차 목표 <b style={{color:'#a78bfa'}}>{px(p.profit1)}</b> <span style={{color:'#94a3b8'}}>(R:R {p.rr1?.toFixed(1)})</span></>
-          : sk==='neutral' ? <>신규 진입 보류 — 점수가 ±25 안쪽(관망)입니다. 보유 중이면 손절선 <b style={{color:'#fb923c'}}>{px(p.stopLoss)}</b> 관리</>
+          ? <>다음 봉 시가(≈ <b>{px(p.entry1)}</b>) 진입 · 초기 손절 <b style={{color:'#fb923c'}}>{px(p.stopLoss)}</b> <span style={{color:'#94a3b8'}}>(−{p.riskPct.toFixed(1)}%)</span> · 이후 최고 종가 − 3 ATR로 추적, 익절 없음 · 권장 비중 총자산의 <b style={{color:'#93c5fd'}}>{Math.min(100, 100/p.riskPct).toFixed(0)}%</b> <span style={{color:'#94a3b8'}}>(손절 시 계좌 −1%)</span></>
+          : sk==='neutral' ? <>신규 진입 보류 — 점수가 ±25 안쪽(관망)입니다. 보유 중이면 추적 손절(현재가 − 3 ATR ≈ <b style={{color:'#fb923c'}}>{px(p.stopLoss)}</b>) 관리</>
           : sk==='avoid'   ? <>신규 매수 보류 — 하락 우위 구간입니다. 보유 중이면 비중 축소를 검토하세요</>
           :                  <>신규 롱 보류 — BTC가 200일선 아래입니다 (과거 하락장에서 롱 신호는 손실)</>;
         const ai = !report._local && report.summary ? (report.summary.split(/(?<=[.!?。]|다\.)\s+/)[0] || '').slice(0, 160) : '';
@@ -2825,9 +2821,10 @@ function ReportHero({report, aiPending}) {
           </div>
         );
       })()}
-      {(stats || report.regime) && (
+      {(stats || report.regime || report.rs) && (
         <div style={{display:'flex',flexWrap:'wrap',gap:'6px 16px',fontSize:'.76rem',color:'#8794a8',marginBottom:12,padding:'8px 12px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8}}>
           {stats && <span>📊 과거 실측 ({EMPIRICAL_CRYPTO_1D.period}, n={stats.n}): 20일 후 평균 <b style={{color:stats.avg>=0?'#4ade80':'#f87171'}}>{stats.avg>=0?'+':''}{stats.avg}%</b> · 중앙값 <b style={{color:stats.med>=0?'#4ade80':'#f87171'}}>{stats.med>=0?'+':''}{stats.med}%</b> <span style={{color:'#8794a8'}}>(전체 평균 +{EMPIRICAL_CRYPTO_1D.all.avg}% · 상승 {EMPIRICAL_CRYPTO_1D.all.up}%)</span></span>}
+          {report.rs && <span>📐 BTC 대비 90일 <b style={{color: report.rs.rel >= 0 ? '#4ade80' : '#f87171'}}>{report.rs.rel >= 0 ? '+' : ''}{(report.rs.rel*100).toFixed(1)}%</b> <span style={{color:'#8794a8'}}>({report.ticker} {(report.rs.coin90*100).toFixed(1)}% vs BTC {(report.rs.btc90*100).toFixed(1)}%{report.rs.rel < 0 ? ' · BTC보다 약함' : ' · BTC보다 강함'} · 참고용)</span></span>}
           {report.regime && (report.regime.unknown
             ? <span>₿ BTC 국면 확인 실패 — 하락장 필터 미적용</span>
             : <span>₿ BTC {report.regime.btcAbove ? <b style={{color:'#4ade80'}}>200일선 위</b> : <b style={{color:'#fb923c'}}>200일선 아래{report.tfId==='1d' ? ' (하락장 필터 작동)' : ''}</b>} · {fmtPx(report.regime.btcPrice,'BTC')} / MA200 {fmtPx(report.regime.btcMa200,'BTC')}{report.tfId && report.tfId!=='1d' ? <span style={{color:'#8794a8'}}> · 필터는 일봉 분석에만 적용 (일봉으로만 검증됨)</span> : null}</span>)}
@@ -2939,8 +2936,7 @@ function AnalysisSection({report}) {
       <div className="price-tags">
         <PriceTag val={report.support}      label="가까운 지지"  color="#4ade80" icon="🟢"/>
         <PriceTag val={report.resistance}   label="가까운 저항"  color="#f87171" icon="🔴"/>
-        <PriceTag val={report.target_price} label="1차 목표"     color="#a78bfa" icon="🎯"/>
-        <PriceTag val={report.stop_loss}    label="손절"         color="#fb923c" icon="⛔"/>
+        <PriceTag val={report.stop_loss}    label="초기 손절 (−3 ATR)" color="#fb923c" icon="⛔"/>
       </div>
 
       {/* 기술 지표 좌우 분할 */}
@@ -3103,6 +3099,54 @@ function DerivativesCard({report}) {
   );
 }
 
+// ─── 판정 규칙의 과거 성과 (검증 결과, 정적) ─────────────────────────────────
+// 규칙: 판정 롱 → 다음 봉 시가 진입, 3 ATR 추적 손절, 익절 없음. 일봉, 편도 비용 0.15%.
+// 54개 코인(상장폐지 포함) 워크포워드. 학습 2020~2022에서 규칙을 고르고 검증 2023~2026-10에서 확인.
+// 앱 엔진(simulateEquity)으로 BTC 수치를 재현해 연구용 시뮬레이터와 일치함을 확인했다.
+const RULE_TRACK_RECORD = [
+  {label:'BTC에 이 규칙 적용',      train:[57.4,-33.5,1.26], test:[18.9,-40.4,0.71], rule:true},
+  {label:'BTC 그냥 보유',          train:[31.9,-76.6,0.76], test:[52.6,-53.0,1.15]},
+  {label:'ETH에 이 규칙 적용',      train:[53.7,-51.3,1.00], test:[16.5,-51.8,0.57], rule:true},
+  {label:'ETH 그냥 보유',          train:[109.0,-79.3,1.26], test:[20.6,-67.6,0.61]},
+  {label:'코인 54종에 적용 (10개 분산)', train:[70.4,-53.4,1.09], test:[-1.2,-75.9,0.23], rule:true},
+  {label:'코인 동일비중 보유',      train:[56.4,-85.4,0.97], test:[7.9,-76.1,0.45]},
+];
+function TrackRecordCard({report}) {
+  if (report?.market !== 'crypto') return null;
+  const c = v => v >= 0 ? '#4ade80' : '#f87171';
+  const cell = ([cagr, mdd, sh]) => <><td style={{textAlign:'right',color:c(cagr)}}>{cagr>0?'+':''}{cagr.toFixed(1)}%</td><td style={{textAlign:'right',color:'#f87171'}}>{mdd.toFixed(0)}%</td><td style={{textAlign:'right'}}>{sh.toFixed(2)}</td></>;
+  return (
+    <details className="card" style={{padding:'14px 18px'}}>
+      <summary style={{cursor:'pointer',fontWeight:700,color:'#cbd5e1',fontSize:'.92rem',userSelect:'none'}}>
+        📏 이 판정 규칙의 과거 성과 <span style={{fontWeight:500,color:'#94a3b8',fontSize:'.8rem'}}>— 낙폭은 크게 줄였지만, 2023~2026엔 그냥 보유보다 수익이 낮았습니다</span>
+      </summary>
+      <div style={{fontSize:'.8rem',color:'#94a3b8',lineHeight:1.7,margin:'10px 0'}}>
+        규칙: 판정이 롱이면 다음 날 시가에 진입, 3 ATR 추적 손절로 청산, 익절 없음. 일봉 · 편도 비용 0.15% · 상장폐지 코인 포함 54종.
+        2020~2022에서 규칙을 고르고 2023~2026에서 한 번만 확인했습니다.
+      </div>
+      <div style={{overflowX:'auto'}}>
+        <table style={{minWidth:560}}>
+          <thead><tr><th></th><th colSpan="3" style={{textAlign:'center'}}>2020~2022 (학습)</th><th colSpan="3" style={{textAlign:'center'}}>2023~2026 (검증)</th></tr>
+            <tr><th>대상</th><th style={{textAlign:'right'}}>연수익</th><th style={{textAlign:'right'}}>최대 낙폭</th><th style={{textAlign:'right'}}>샤프</th><th style={{textAlign:'right'}}>연수익</th><th style={{textAlign:'right'}}>최대 낙폭</th><th style={{textAlign:'right'}}>샤프</th></tr></thead>
+          <tbody>
+            {RULE_TRACK_RECORD.map(r => (
+              <tr key={r.label} style={r.rule ? {} : {color:'#8794a8'}}>
+                <td style={{fontWeight: r.rule ? 700 : 400, whiteSpace:'nowrap'}}>{r.label}</td>{cell(r.train)}{cell(r.test)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{fontSize:'.8rem',color:'#cbd5e1',lineHeight:1.7,marginTop:10}}>
+        • <b>하락장 손실을 크게 줄였습니다</b> — BTC 최대 낙폭 −77% → −34% (2020~2022).<br/>
+        • <b>상승장에서는 덜 벌었습니다</b> — 2023~2026 BTC 보유 연 +53% vs 규칙 +19%.<br/>
+        • <b>알트에 분산 적용하면 2023~2026엔 손실</b>이었습니다 — 이 기간 알트 50개 중 47개가 BTC보다 부진했습니다.<br/>
+        <span style={{color:'#8794a8'}}>그래서 이 앱의 판정은 "더 버는 신호"보다 "크게 잃지 않게 하는 규칙"으로 쓰는 것이 과거 데이터에 맞습니다. 실제 성과는 성과 탭에 쌓이는 기록으로 확인하세요.</span>
+      </div>
+    </details>
+  );
+}
+
 // ─── 내 포지션 전략 카드 ──────────────────────────────────────────────────────
 const POSITIONS_KEY = 'cs_positions';
 function PositionAdvisor({report}) {
@@ -3208,7 +3252,6 @@ function PositionAdvisor({report}) {
           {adv.futures && <Box label="펀딩비 비용 (증거금, 하루)" value={adv.fundDaily == null ? (deriv.loading ? '조회 중' : '—') : `${adv.fundDaily > 0 ? '-' : '+'}${Math.abs(adv.fundDaily).toFixed(3)}%`}
             color={adv.fundDaily == null ? '#8794a8' : adv.fundDaily > 0 ? '#fbbf24' : '#4ade80'}
             sub={adv.funding == null ? '선물 데이터 없음' : `${deriv.data?.fundingIntervalH || 8}시간마다 ${(adv.funding*100).toFixed(4)}% · ${adv.fundDaily > 0 ? '지급' : '수령'}`}/>}
-          {adv.targets.length>0 && <Box label={adv.side>0?'익절 후보 (가까운 저항)':'익절 후보 (가까운 지지)'} value={adv.targets.map(t=>fmtPx(t.price,ticker)).join(' / ')} color="#a78bfa" sub={adv.targets.map(t=>t.src).join(' / ')}/>}
         </div>
 
         <div style={{display:'flex',flexDirection:'column',gap:6}}>
@@ -3624,7 +3667,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         lr.summary = 'AI 해설은 ⚙️에서 Google API 키를 넣으면 추가됩니다. 판정·점수·매매 플랜·포지션 전략은 키 없이 계산된 결과입니다.';
         setReport(lr);
         const entry = {date:new Date().toISOString(), ticker:lr.ticker, position:lr.position, confidence:lr.confidence, stance:lr.stance, summary:lr.summary,
-          tf:tfId, score:lr.score, price:lr.price, entry:lr.computed?.tradePlan?.entry1, stop:lr.stop_loss, tp1:lr.target_price, entryMode:lr.computed?.tradePlan?.entryMode};
+          tf:tfId, score:lr.score, price:lr.price, entry:lr.computed?.tradePlan?.entry1, stop:lr.stop_loss, entryMode:lr.computed?.tradePlan?.entryMode, planType:lr.computed?.tradePlan?.planType, atr:lr.computed?.tradePlan?.atr};
         const prev = ls_get('cs_logs')||[];
         ls_set('cs_logs', [...prev.slice(-99), entry]);
         setLogs(prev => [...prev.slice(-99), entry]);
@@ -3640,7 +3683,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
         setReport(r);
         // Save to logs
         const entry = {date:new Date().toISOString(), ticker:r.ticker, position:r.position, confidence:r.confidence, stance:r.stance, summary:r.summary,
-          tf:tfId, score:r.score, price:r.price, entry:r.computed?.tradePlan?.entry1, stop:r.stop_loss, tp1:r.target_price, entryMode:r.computed?.tradePlan?.entryMode};
+          tf:tfId, score:r.score, price:r.price, entry:r.computed?.tradePlan?.entry1, stop:r.stop_loss, entryMode:r.computed?.tradePlan?.entryMode, planType:r.computed?.tradePlan?.planType, atr:r.computed?.tradePlan?.atr};
         const prev = ls_get('cs_logs')||[];
         ls_set('cs_logs', [...prev.slice(-99), entry]);
         setLogs(prev => [...prev.slice(-99), entry]);
@@ -3759,7 +3802,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
             ))}
           </nav>
 
-          <div id="sec-summary"><ReportHero report={shown} aiPending={aiLoading}/></div>
+          <div id="sec-summary"><ReportHero report={shown} aiPending={aiLoading}/><TrackRecordCard report={shown}/></div>
 
           <div id="sec-chart">
             <div className="seg-tabs">
@@ -3891,7 +3934,7 @@ function CompareTab({apiKey, serverHasKey}) {
           <div className="card">
             <div className="card-title">📊 비교 요약</div>
             <table>
-              <thead><tr><th>종목</th><th>포지션</th><th>과거 상승률</th><th>현재가</th><th>목표가</th><th>리스크</th></tr></thead>
+              <thead><tr><th>종목</th><th>포지션</th><th>과거 상승률</th><th>현재가</th><th>초기 손절</th><th>리스크</th></tr></thead>
               <tbody>
                 {results.map((r,i)=>(
                   <tr key={i}>
@@ -3899,7 +3942,7 @@ function CompareTab({apiKey, serverHasKey}) {
                     <td><span className={`badge ${r.position==='long'?'badge-green':r.position==='short'?'badge-red':'badge-yellow'}`}>{r.position||'hold'}</span></td>
                     <td>{r.confidence!=null ? `${r.confidence}%` : '—'}</td>
                     <td>{r.price?`$${r.price.toLocaleString()}`:'-'}</td>
-                    <td>{r.target_price?`$${r.target_price.toLocaleString()}`:'-'}</td>
+                    <td>{r.stop_loss ? fmtPx(r.stop_loss, r.ticker) : '-'}</td>
                     <td><span className={`badge ${r.risk_level==='low'?'badge-green':r.risk_level==='high'?'badge-red':'badge-yellow'}`}>{r.risk_level||'-'}</span></td>
                   </tr>
                 ))}
@@ -3940,7 +3983,7 @@ function PerformanceTab() {
     setBusy(true); setMsg('');
     let done = 0, fail = 0;
     const queue = [...idx];
-    const need = Math.max(GRADE_RULES.fillWait + GRADE_RULES.holdMax, GRADE_RULES.fwdBars) + 5;
+    const need = 300;   // 추적 손절은 보유가 길어질 수 있어 넉넉히 (확정 전까지 다시 확인)
     const worker = async () => {
       while (queue.length) {
         const i = queue.shift(), l = all[i];
@@ -3954,7 +3997,10 @@ function PerformanceTab() {
     await Promise.all([worker(), worker(), worker()]);
     // 채점 중에 새로 저장된 기록이 있으면 보존
     const latest = ls_get('cs_logs', []);
-    const merged = latest.map(l => { const g = all.find(x => x.date === l.date && x.ticker === l.ticker); return g && g.grade ? {...l, grade: g.grade} : l; });
+    // 같은 시각·같은 코인 기록이 여러 개일 수 있으므로 플랜 내용까지 포함한 키로 맞춘다
+    const k = l => [l.date, l.ticker, l.tf || '1d', l.stance || l.position, l.entry, l.stop, l.planType || 'legacy'].join('|');
+    const graded = new Map(all.filter(x => x.grade).map(x => [k(x), x.grade]));
+    const merged = latest.map(l => graded.has(k(l)) ? {...l, grade: graded.get(k(l))} : l);
     ls_set('cs_logs', merged); setLogs(merged);
     setBusy(false); setProgress('');
     if (fail) setMsg(`${fail}건은 캔들을 받지 못했습니다. 다음 채점 때 다시 시도합니다.`);
@@ -3977,6 +4023,7 @@ function PerformanceTab() {
       case 'tp':       return <span className="badge badge-green">익절 {fmtR(t.R)} · {t.bars}봉</span>;
       case 'stop':     return <span className="badge badge-red">손절 {fmtR(t.R)} · {t.bars}봉</span>;
       case 'timeout':  return <span className="badge badge-yellow">시간초과 {fmtR(t.R)}</span>;
+      case 'exit':     return <span className={`badge ${t.R > 0 ? 'badge-green' : 'badge-red'}`}>추적 손절 청산 {fmtR(t.R)} · {t.bars}봉</span>;
       default:         return '—';
     }
   };
@@ -4004,8 +4051,10 @@ function PerformanceTab() {
           </div>
         </div>
         <div style={{fontSize:'.8rem',color:'#94a3b8',lineHeight:1.7,marginBottom:14}}>
-          분석할 때 기록된 진입·손절·1차 목표를 <b>그 이후 실제 캔들</b>로 채점합니다. 지정가는 {GRADE_RULES.fillWait}봉 안에 닿아야 체결,
-          체결 후 최대 {GRADE_RULES.holdMax}봉 보유, 같은 봉에서 손절·익절이 함께 닿으면 손절로 치고, 지정가 체결 봉에서는 익절을 인정하지 않습니다(보수적). 수수료는 선택한 비율을 R로 환산해 차감합니다.
+          분석할 때 기록된 롱 판정을 <b>그 이후 실제 캔들</b>로 채점합니다. 앱의 규칙 그대로 다음 봉 시가에 진입하고,
+          진입가 − 3 ATR에서 시작해 최고 종가 − 3 ATR로 올라가는 추적 손절에 걸릴 때 청산합니다(장중 저가 기준, 갭은 시가 체결).
+          아직 손절에 걸리지 않은 거래는 "진행 중"으로 표시합니다. 수수료는 선택한 비율을 R로 환산해 차감합니다.
+          이전 버전(고정 익절 플랜)의 기록은 그때 규칙으로 채점합니다.
         </div>
         {msg && <div className="alert-box alert-warn" style={{fontSize:'.82rem'}}>{msg}</div>}
 
@@ -4014,9 +4063,9 @@ function PerformanceTab() {
         ) : <>
           <div className="price-tags" style={{marginBottom:14}}>
             <Tile label="분석 기록" value={logs.length} sub={`채점 확정 ${sm.final} · 진행 중 ${sm.open + sm.waiting}`}/>
-            <Tile label="롱 플랜 매매 결과" value={`${sm.trades}건`} sub={sm.trades ? `익절 ${sm.wins} · 손절 ${sm.stops} · 시간초과 ${sm.timeouts} · 미체결 ${sm.unfilled}` : `미체결 ${sm.unfilled}`}/>
-            <Tile label="익절 비율" value={sm.trades ? `${(sm.wins/sm.trades*100).toFixed(0)}%` : '—'} sub="백테스트(코인 일봉 2023~): 약 41%"/>
-            <Tile label="거래당 평균 (수수료 후)" value={fmtR(sm.avgNetR)} color={colR(sm.avgNetR)} sub={`수수료 전 ${fmtR(sm.avgR)} · 누적 ${fmtR(sm.trades ? sm.sumNetR : null)} · 백테스트(일봉 2023~, 왕복 0.2%) 약 +0.04R`}/>
+            <Tile label="롱 플랜 매매 결과" value={`${sm.trades}건`} sub={sm.trades ? `수익 ${sm.wins} · 손실 ${sm.stops}${sm.unfilled ? ` · 미체결 ${sm.unfilled}` : ''}` : '확정된 거래 없음'}/>
+            <Tile label="수익 거래 비율" value={sm.trades ? `${(sm.wins/sm.trades*100).toFixed(0)}%` : '—'} sub="추적 손절은 승률이 낮고 큰 수익 몇 번이 성과를 만듭니다"/>
+            <Tile label="거래당 평균 (수수료 후)" value={fmtR(sm.avgNetR)} color={colR(sm.avgNetR)} sub={`수수료 전 ${fmtR(sm.avgR)} · 누적 ${fmtR(sm.trades ? sm.sumNetR : null)} · 같은 규칙의 과거 성과는 백테스트 탭에서`}/>
           </div>
           {sm.trades < 30 && (
             <div style={{fontSize:'.8rem',color:'#fbbf24',marginBottom:14}}>
@@ -4055,7 +4104,7 @@ function PerformanceTab() {
           <div style={{fontSize:'.84rem',fontWeight:700,color:'#cbd5e1',marginBottom:8}}>최근 기록</div>
           <div style={{overflowX:'auto'}}>
             <table style={{minWidth:640}}>
-              <thead><tr><th>날짜</th><th>코인 · 봉</th><th>판정</th><th>진입 / 손절 / 목표</th><th>매매 결과</th><th style={{textAlign:'right'}}>{GRADE_RULES.fwdBars}봉 후</th></tr></thead>
+              <thead><tr><th>날짜</th><th>코인 · 봉</th><th>판정</th><th>진입 / 초기 손절</th><th>매매 결과</th><th style={{textAlign:'right'}}>{GRADE_RULES.fwdBars}봉 후</th></tr></thead>
               <tbody>
                 {[...logs].reverse().slice(0, 40).map((l, i) => {
                   const st = STANCE_UI[l.stance] || STANCE_UI[l.position === 'long' ? 'long' : 'neutral'];
@@ -4067,7 +4116,7 @@ function PerformanceTab() {
                       <td style={{fontWeight:700,whiteSpace:'nowrap'}}>{l.ticker} <span style={{color:'#8794a8',fontWeight:500,fontSize:'.76rem'}}>{tf}</span></td>
                       <td style={{whiteSpace:'nowrap'}}><span style={{color:st.color,fontWeight:700}}>{st.label}</span>{l.score != null && <span style={{color:'#8794a8',fontSize:'.76rem'}}> {l.score>0?'+':''}{l.score}</span>}</td>
                       <td style={{fontSize:'.78rem',fontFamily:'monospace',whiteSpace:'nowrap'}}>
-                        {l.entry > 0 ? <>{fmtPx(l.entry,l.ticker)} / <span style={{color:'#fb923c'}}>{fmtPx(l.stop,l.ticker)}</span> / <span style={{color:'#a78bfa'}}>{fmtPx(l.tp1,l.ticker)}</span></> : '—'}
+                        {l.entry > 0 ? <>{fmtPx(l.entry,l.ticker)} / <span style={{color:'#fb923c'}}>{fmtPx(l.stop,l.ticker)}</span>{l.tp1 ? <> / <span style={{color:'#a78bfa'}}>{fmtPx(l.tp1,l.ticker)}</span> <span style={{color:'#8794a8'}}>(옛 플랜)</span></> : null}</> : '—'}
                       </td>
                       <td style={{fontSize:'.8rem'}}>{tradeCell(l)}</td>
                       <td style={{textAlign:'right',whiteSpace:'nowrap',color: g?.fwd != null ? colR(g.fwd) : '#8794a8'}}>
@@ -4152,14 +4201,15 @@ function BacktestTab() {
         const btc = /^BTC/.test(sym) ? bars : (await fetchKlinesHistory('BTC', '1d', bars.length + 200)).bars;
         regimeAt = regimeLookup(btc);
       }
-      const first = W - 1, last = bars.length - 1 - GRADE_RULES.fwdBars;     // 20봉 뒤 결과가 있는 시점까지만
-      const count = last - first + 1, step = Math.max(1, Math.ceil(count / 600));
+      const first = W - 1, last = bars.length - 1;
+      const count = last - first + 1, step = 1;      // 계좌 시뮬레이션을 위해 매 봉 판정
       const samples = [];
       for (let t = first, k = 0; t <= last; t += step, k++) {
         samples.push(verdictSampleAt(bars, t, {tf, window: W, regimeAt}));
         if (k % 15 === 0) { setProgress(`판정 계산 ${Math.round((t - first) / count * 100)}%`); await new Promise(r => setTimeout(r, 0)); }
       }
-      setRes({...summarizeBacktest(samples, step, fee), sym, source, step, tf, tfLabel: tfCfg.label, W, filter: !!regimeAt, total: bars.length, fee});
+      const equity = simulateEquity(bars, samples, fee / 2, 525600 / TF_MINUTES[tf]);
+      setRes({...summarizeBacktest(samples.filter(x => x.grade.fwd != null), step, fee), equity, sym, source, step, tf, tfLabel: tfCfg.label, W, filter: !!regimeAt, total: bars.length, fee});
     } catch(e) { setError(e.message); }
     finally { setBusy(false); setProgress(''); }
   };
@@ -4173,11 +4223,12 @@ function BacktestTab() {
         await ensurePlotly();
         if (cancelled || !chartRef.current) return;
         const toX = a => a.map(p => new Date(p.t).toISOString().slice(0,10));
+        const E = res.equity;
         Plotly.react(chartRef.current, [
-          {type:'scatter', mode:'lines', name:'판정대로 (롱일 때만 진입, 수수료 후)', x:toX(res.curveVerdict), y:res.curveVerdict.map(p=>p.cum), line:{color:'#22c55e', width:2}},
-          {type:'scatter', mode:'lines', name:'대조군: 항상 진입', x:toX(res.curveAlways), y:res.curveAlways.map(p=>p.cum), line:{color:'#94a3b8', width:1.5, dash:'dot'}},
+          {type:'scatter', mode:'lines', name:'판정 규칙대로 운용 (수수료 후)', x:toX(E.eq), y:E.eq.map(p=>p.v), line:{color:'#22c55e', width:2}},
+          {type:'scatter', mode:'lines', name:'그냥 보유', x:toX(E.holdEq), y:E.holdEq.map(p=>p.v), line:{color:'#94a3b8', width:1.5, dash:'dot'}},
         ], {paper_bgcolor:'#1e293b', plot_bgcolor:'#1e293b', font:{color:'#cbd5e1', size:11},
-            margin:{l:48, r:12, t:10, b:36}, yaxis:{title:{text:'누적 R'}, gridcolor:'#334155', zerolinecolor:'#64748b'},
+            margin:{l:48, r:12, t:10, b:36}, yaxis:{title:{text:'계좌 (시작 = 1)'}, type:'log', gridcolor:'#334155', zerolinecolor:'#64748b'},
             xaxis:{gridcolor:'#334155'}, legend:{orientation:'h', y:1.12, x:0}}, {responsive:true, displayModeBar:false});
       } catch(e) { if (!cancelled) setError(e.message); }
     })();
@@ -4220,8 +4271,8 @@ function BacktestTab() {
       <div className="card">
         <div className="card-title">🔬 판정 엔진 백테스트</div>
         <div style={{fontSize:'.8rem', color:'#94a3b8', lineHeight:1.7, marginBottom:12}}>
-          과거 각 시점에서 <b>그때까지의 캔들만으로</b> 앱과 똑같이 판정·매매 플랜을 만들고, 이후 캔들로 성과 탭과 같은 규칙으로 채점합니다.
-          "항상 진입"과 비교하면 판정이 실제로 도움이 되는지 보입니다.
+          과거 각 봉에서 <b>그때까지의 캔들만으로</b> 앱과 똑같이 판정하고, 롱이면 다음 봉 시가에 진입해 3 ATR 추적 손절로 청산하는 규칙대로
+          계좌를 운용했을 때를 <b>같은 기간 그냥 보유</b>와 비교합니다. 거래 단위 채점은 성과 탭과 같은 규칙입니다.
         </div>
         <div style={{display:'flex', gap:8, flexWrap:'wrap', alignItems:'center'}}>
           <div style={{flex:'1 1 160px'}}><SearchAutocomplete value={query} onChange={setQuery} onSearch={setQuery} placeholder="코인 (예: BTC, ETH)"/></div>
@@ -4248,14 +4299,28 @@ function BacktestTab() {
         <div className="card">
           <div className="card-title" style={{marginBottom:8}}>📋 {res.sym} · {res.tfLabel} · {new Date(res.from).toISOString().slice(0,10)} ~ {new Date(res.to).toISOString().slice(0,10)}</div>
           <div style={{fontSize:'.78rem', color:'#8794a8', marginBottom:12}}>
-            {res.total}봉({res.source}) 중 판정 표본 {res.n}개 ({res.step}봉 간격) · 판정 창 {res.W}봉 · BTC 필터 {res.filter ? '적용' : '미적용'}
+            {res.total}봉({res.source}) · 매 봉 판정 · 판정 창 {res.W}봉 · BTC 필터 {res.filter ? '적용' : '미적용'} · 규칙: 롱 판정 → 다음 봉 시가 진입, 3 ATR 추적 손절, 익절 없음
           </div>
+          {res.equity && (() => { const E = res.equity, S = E.strat, H = E.hold, pc = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+            const better = S.sharpe > H.sharpe;
+            return (
+              <div style={{marginBottom:12}}>
+                <div className="price-tags" style={{gridTemplateColumns:'repeat(2,minmax(0,1fr))'}}>
+                  <Tile label="판정 규칙대로 운용 (연수익)" value={pc(S.cagr)} color={colR(S.cagr)} sub={`최대 낙폭 ${pc(S.mdd)} · 샤프 ${S.sharpe.toFixed(2)} · 거래 ${S.trades} · 보유 시간 ${(S.exposure*100).toFixed(0)}%`}/>
+                  <Tile label="같은 기간 그냥 보유 (연수익)" value={pc(H.cagr)} color={colR(H.cagr)} sub={`최대 낙폭 ${pc(H.mdd)} · 샤프 ${H.sharpe.toFixed(2)}`}/>
+                </div>
+                <div style={{fontSize:'.8rem',color: better ? '#4ade80' : '#fbbf24',marginTop:2}}>
+                  {better ? '이 기간에는 판정 규칙이 위험 대비 수익(샤프)에서 보유보다 나았습니다.' : '이 기간에는 판정 규칙이 위험 대비 수익(샤프)에서 그냥 보유보다 못했습니다.'}
+                  {S.mdd > H.mdd ? ' 최대 낙폭은 더 작았습니다.' : ''}
+                </div>
+              </div>
+            ); })()}
           <div className="price-tags">
             <Tile label="판정대로 매매 (롱 판정만, 수수료 후)" value={fmtR(v.avgNetR)} color={colR(v.avgNetR)} sub={`수수료 전 ${fmtR(v.avgR)} · 거래 ${v.n} · 익절 ${v.n ? Math.round(v.wins/v.n*100) : 0}% · 누적 ${fmtR(v.n ? v.sumNetR : null)}`}/>
             <Tile label="대조군: 항상 진입 (수수료 후)" value={fmtR(a.avgNetR)} color={colR(a.avgNetR)} sub={`수수료 전 ${fmtR(a.avgR)} · 거래 ${a.n} · 익절 ${a.n ? Math.round(a.wins/a.n*100) : 0}%`}/>
             <Tile label="판정 효과 (거래당, 수수료 후)" value={v.avgNetR != null && a.avgNetR != null ? fmtR(v.avgNetR - a.avgNetR) : '—'} color={colR(v.avgNetR != null && a.avgNetR != null ? v.avgNetR - a.avgNetR : null)} sub="판정대로 − 항상 진입"/>
             <Tile label="통계적 신뢰 (t값, 수수료 후)" value={v.tStat == null ? '—' : v.tStat.toFixed(2)} color={v.tStat != null && Math.abs(v.tStat) >= 2 ? '#4ade80' : '#fbbf24'}
-                  sub={`독립 표본 ${v.nIndep}건 (${GRADE_RULES.fillWait + GRADE_RULES.holdMax}봉 간격) · |t| ≥ 2 이상이어야 우연 아님`}/>
+                  sub={`독립 표본 ${v.nIndep}건 (${v.gapBars}봉 간격) · |t| ≥ 2 이상이어야 우연 아님`}/>
           </div>
           <div ref={chartRef} style={{height:300, marginTop:4}}/>
         </div>
@@ -4270,8 +4335,8 @@ function BacktestTab() {
         <div style={{fontSize:'.76rem', color:'#8794a8', lineHeight:1.7, padding:'0 4px 16px'}}>
           ⚠️ 해석 주의: 인접 표본은 보유 기간이 겹쳐 독립이 아니므로 t값은 {GRADE_RULES.fwdBars}봉 이상 떨어진 표본만으로 계산했습니다.
           수수료는 {res.fee ? `왕복 ${(res.fee*100).toFixed(1)}%` : '0%'}를 차감했습니다. R은 손절폭 기준이라 손절폭이 좁은 짧은 봉일수록 같은 수수료가 R로 커집니다
-          (이 백테스트: 손절폭 중앙값 {v.medRiskPct ? (v.medRiskPct*100).toFixed(2) + '%' : '—'}, 거래당 수수료 약 {v.avgFeeR != null ? v.avgFeeR.toFixed(2) : '—'}R). 슬리피지는 제외했고,
-          지정가 체결 봉에서는 익절을 인정하지 않습니다. 마지막 {GRADE_RULES.fwdBars}봉 이내 시점은 결과가 없어 제외했습니다.
+          (이 백테스트: 손절폭 중앙값 {v.medRiskPct ? (v.medRiskPct*100).toFixed(2) + '%' : '—'}, 거래당 수수료 약 {v.avgFeeR != null ? v.avgFeeR.toFixed(2) : '—'}R). 슬리피지는 제외했습니다.
+          기간 끝까지 손절에 걸리지 않은 거래는 마지막 종가로 평가했습니다. 한 코인의 결과이며, 여러 코인·기간에서 비슷해야 믿을 만합니다.
           한 코인·한 기간의 결과이며 미래 성과를 보장하지 않습니다.
         </div>
       </>}
