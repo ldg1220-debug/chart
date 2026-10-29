@@ -1,8 +1,15 @@
 {
   "name": "chart-sentinel-build",
   "private": true,
-  "description": "chart-sentinel-standalone.html 을 CDN 없이 열리는 단일 파일(dist/chart-sentinel.html)로 빌드",
-  "scripts": { "build": "node build.js" },
+  "description": "chart-sentinel 빌드(dist) 및 판정 엔진 검증 도구(research)",
+  "scripts": {
+    "build": "node build.js",
+    "research:data": "cd research && node fetch-data.js",
+    "research:precompute": "cd research && node precompute.js",
+    "research:check": "cd research && node check-engine.js",
+    "research:portfolio": "cd research && node portfolio.js",
+    "research:empirical": "cd research && node empirical.js"
+  },
   "devDependencies": {
     "@babel/core": "^7.24.0",
     "@babel/preset-react": "^7.24.0",

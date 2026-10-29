@@ -11,3 +11,7 @@ portfolio.json
 # API 키가 내장된 개인용 빌드
 dist/*.local.html
 tools/.env.local
+
+# 검증 도구 데이터·생성 파일
+tools/research/data/
+tools/research/.cache/

@@ -55,6 +55,11 @@ npm run build                                   # → dist/chart-sentinel.local.
 
 `dist/chart-sentinel.local.html`을 열면 키 입력 창 없이 바로 동작합니다. 이 파일은 `.gitignore` 대상이라 커밋되지 않지만, **파일 자체를 남에게 보내거나 공개 저장소·메신저에 올리면 키가 그대로 노출**됩니다. 공개용 `dist/chart-sentinel.html`에는 키가 들어가지 않습니다.
 
+### 판정이 실제로 돈이 됐는지 검증하기
+
+`tools/research/`에 과거 데이터로 앱의 판정 규칙을 검증하는 도구가 있습니다(상장폐지 코인 포함 54종, 수수료 반영, 학습·검증 구간 분리).
+사용법과 지금까지의 결론은 [`tools/research/README.md`](tools/research/README.md)를 보세요.
+
 ### 소스 수정 후 다시 만들기
 
 `dist/chart-sentinel.html`은 `chart-sentinel-standalone.html`(원본, 수정은 여기서)을 빌드한 결과물입니다.
