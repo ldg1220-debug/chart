@@ -1007,14 +1007,14 @@ function buildPositionAdvice(inp, ctx) {
   const movePct = side * (price / avg - 1) * 100;              // 가격 기준 손익
   const marginPct = movePct * lev;                              // 증거금 기준 손익
   const accountPct = marginPct * w;                             // 계좌 영향
-  const exposurePct = weightPct * lev;                          // 실질 노출 (총자산 대비)
+  const exposurePct = weightPct * lev * (price / avg);         // 실질 노출: 현재 명목가(수량 × 현재가) ÷ 총자산
 
   // 보호 손절선: 검증한 매매 규칙과 같은 3 ATR 추적 손절 (보유 중 최고 종가를 모르므로 현재가 기준)
   const stop = price - side * TRAIL_MULT * a;
   const stopSrc = `현재가 ${side > 0 ? '−' : '+'} 3 ATR`;
   const stopMovePct = side * (stop / price - 1) * 100;          // 지금부터 손절까지 (음수)
   const accountAtStop = side * (stop / avg - 1) * 100 * lev * w; // 손절 시 계좌 손익(평단 기준)
-  const riskFromNow = Math.abs(stopMovePct) * lev * w;           // 지금부터 손절까지 추가 손실(계좌 %)
+  const riskFromNow = Math.abs(stopMovePct) * exposurePct / 100;  // 지금부터 손절까지 추가 손실(계좌 %) = 현재 명목가 × 손절폭
 
   // 청산가 (선물·격리 근사) 와 안전 레버리지(손절선보다 1 ATR 더 바깥에 청산가)
   let liq = null, liqDistPct = null, liqAtr = null, safeLev = null, liqBeforeStop = false, liqTooClose = false;
@@ -1038,7 +1038,7 @@ function buildPositionAdvice(inp, ctx) {
     const cut = Math.round((1 - ACCOUNT_RISK_LIMIT / riskFromNow) * 100);
     tips.push({lv:'warn', text:`손절선까지 가면 계좌의 ${riskFromNow.toFixed(1)}%를 추가로 잃습니다 (권장 ${ACCOUNT_RISK_LIMIT}% 이하). 포지션을 약 ${cut}% 줄이면 한도 안에 들어옵니다.`});
   }
-  if (exposurePct > 100) tips.push({lv:'warn', text:`실질 노출이 총자산의 ${exposurePct.toFixed(0)}%입니다 (비중 ${weightPct}% × ${lev}배).`});
+  if (exposurePct > 100) tips.push({lv:'warn', text:`실질 노출이 총자산의 ${exposurePct.toFixed(0)}%입니다 (포지션 명목가 ÷ 총자산).`});
 
   const inProfit = movePct > 0.1, inLoss = movePct < -0.1;   // ±0.1%는 본전
   if (side > 0) {
@@ -3279,8 +3279,13 @@ function AdviceView({adv, ticker, amount, stance, deriv}) {
 
 // 포지션 등록·수정 폼
 function PositionForm({initial, onSave, onCancel}) {
-  const [f, setF] = React.useState(() => ({ticker:'', type:'spot', side:'long', lev:'3', avg:'', amount:'', memo:'', ...initial,
-    lev: String(initial?.lev ?? 3), avg: initial?.avg != null ? String(initial.avg) : '', amount: initial?.amount != null ? String(initial.amount) : ''}));
+  const [f, setF] = React.useState(() => ({ticker:'', type:'spot', side:'long', lev:'3', avg:'', amount:'', memo:'', mode:'amount', qty:'', ...initial,
+    lev: String(initial?.lev ?? 3), avg: initial?.avg != null ? String(initial.avg) : '', amount: initial?.amount != null ? String(initial.amount) : '',
+    qty: initial?.amount > 0 && initial?.avg > 0 ? String(+(initial.amount * (initial.lev || 1) / initial.avg).toPrecision(8)) : ''}));
+  // 수량 ↔ 투입 금액 환산: 현물 금액 = 수량 × 평단, 선물 증거금 = 수량 × 평단 ÷ 레버리지
+  const levN = f.type === 'futures' ? (parseFloat(f.lev) || 1) : 1, avgN = parseFloat(f.avg);
+  const amountFromQty = q => q > 0 && avgN > 0 ? q * avgN / levN : null;
+  const qtyFromAmount = a => a > 0 && avgN > 0 ? a * levN / avgN : null;
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF(p => ({...p, [k]: v}));
@@ -3293,10 +3298,11 @@ function PositionForm({initial, onSave, onCancel}) {
     catch { setErr('현재가를 가져오지 못했습니다'); } finally { setBusy(false); }
   };
   const save = () => {
-    const ticker = f.ticker.trim().toUpperCase().replace(/USDT$/, ''), avg = parseFloat(f.avg), amount = parseFloat(f.amount), lev = parseFloat(f.lev);
+    const ticker = f.ticker.trim().toUpperCase().replace(/USDT$/, ''), avg = parseFloat(f.avg), lev = parseFloat(f.lev);
+    const amount = f.mode === 'qty' ? amountFromQty(parseFloat(f.qty)) : parseFloat(f.amount);
     if (!ticker) return setErr('코인을 입력하세요');
     if (!(avg > 0)) return setErr('평균 단가를 입력하세요');
-    if (!(amount > 0)) return setErr('투입 금액을 입력하세요');
+    if (!(amount > 0)) return setErr(f.mode === 'qty' ? '수량과 평균 단가를 입력하세요' : '투입 금액을 입력하세요');
     if (f.type === 'futures' && !(lev >= 1 && lev <= 125)) return setErr('레버리지는 1~125배');
     onSave({...initial, id: initial?.id || posId(), ticker, type: f.type, side: f.type === 'futures' ? f.side : 'long', lev: f.type === 'futures' ? lev : 1, avg, amount, memo: f.memo, createdAt: initial?.createdAt || Date.now()});
   };
@@ -3320,7 +3326,23 @@ function PositionForm({initial, onSave, onCancel}) {
         <div style={{flex:'1 1 140px'}}><span style={lab}>평균 단가 ($)</span>
           <div style={{display:'flex',gap:4}}><input type="number" value={f.avg} onChange={e => set('avg', e.target.value)}/>
             <button className="btn-secondary" style={{padding:'6px 8px',fontSize:'.8rem',whiteSpace:'nowrap'}} onClick={fillPrice} disabled={busy} title="현재가로 채우기">현재가</button></div></div>
-        <div style={{flex:'1 1 140px'}}><span style={lab}>투입 금액 ($){f.type === 'futures' ? ' · 증거금' : ''}</span><input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="예: 2000"/></div>
+        <div style={{flex:'1 1 180px'}}>
+          <span style={{...lab,display:'flex',alignItems:'center',gap:6}}>
+            <span style={{display:'inline-flex',borderRadius:5,overflow:'hidden'}}>
+              <button style={{...seg(f.mode==='amount'),padding:'2px 8px',fontSize:'.78rem'}} onClick={() => set('mode','amount')}>금액</button>
+              <button style={{...seg(f.mode==='qty'),padding:'2px 8px',fontSize:'.78rem'}} onClick={() => set('mode','qty')}>수량</button>
+            </span>
+            {f.mode === 'qty' ? `수량 (${(f.ticker || '코인').toUpperCase()} 개수)` : `투입 금액 ($)${f.type === 'futures' ? ' · 증거금' : ''}`}
+          </span>
+          {f.mode === 'qty'
+            ? <input type="number" value={f.qty} onChange={e => set('qty', e.target.value)} placeholder="예: 0.05"/>
+            : <input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="예: 2000"/>}
+          <div style={{fontSize:'.8rem',color:'#94a3b8',marginTop:4,minHeight:'1.2em'}}>
+            {f.mode === 'qty'
+              ? (amountFromQty(parseFloat(f.qty)) ? `= 투입 ${fmtUsd(amountFromQty(parseFloat(f.qty)))}${f.type === 'futures' ? ` (증거금, 명목 ${fmtUsd(parseFloat(f.qty) * avgN)})` : ''}` : '평균 단가를 넣으면 투입 금액으로 환산됩니다')
+              : (qtyFromAmount(parseFloat(f.amount)) ? `= ${+qtyFromAmount(parseFloat(f.amount)).toPrecision(6)} ${(f.ticker || '').toUpperCase()}${f.type === 'futures' ? ` (명목 ${fmtUsd(parseFloat(f.amount) * levN)})` : ''}` : '')}
+          </div>
+        </div>
         <div style={{flex:'2 1 180px'}}><span style={lab}>메모 (선택)</span><input value={f.memo} onChange={e => set('memo', e.target.value)}/></div>
       </div>
       {err && <div style={{color:'#f87171',fontSize:'.8rem',marginTop:8}}>{err}</div>}
@@ -3427,11 +3449,11 @@ function MyPositionsTab({onAnalyze}) {
               <div className="pos-row" onClick={() => setOpen(isOpen ? null : p.id)}>
                 <div>
                   <div style={{fontWeight:800,fontSize:'1rem'}}>{p.ticker} <span className={`badge ${p.type === 'futures' ? (p.side === 'short' ? 'badge-red' : 'badge-green') : 'badge-gray'}`} style={{fontSize:'.8rem'}}>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</span></div>
-                  <div style={{fontSize:'.8rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {fmtUsd(p.amount)}</div>
+                  <div style={{fontSize:'.8rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {p.amount && p.avg ? `${+(p.amount * (p.type === 'futures' ? (+p.lev || 1) : 1) / p.avg).toPrecision(5)}개` : ''} · 투입 {fmtUsd(p.amount)}</div>
                 </div>
                 <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>현재가</div><div style={{fontFamily:'monospace',fontWeight:700}}>{v ? fmtPx(priceOf(p.ticker), p.ticker) : (a?.error ? '조회 실패' : '…')}</div></div>
                 <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>손익</div><div style={{fontWeight:800,color: v ? pnlCol(v.pnlPct) : '#8794a8'}}>{v ? sgnPct(v.pnlPct) : '—'}</div><div style={{fontSize:'.8rem',color: v ? pnlCol(v.pnl) : '#8794a8'}}>{v ? fmtUsd(v.pnl) : ''}</div></div>
-                <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>투입 비중</div><div style={{fontWeight:700}}>{T.total > 0 && p.amount ? `${(p.amount / T.total * 100).toFixed(1)}%` : '—'}</div></div>
+                <div title="현재 평가액 ÷ 총자산 (현금 포함 합계 100%)"><div style={{fontSize:'.8rem',color:'#8794a8'}}>비중</div><div style={{fontWeight:700}}>{T.total > 0 ? `${((v ? v.equity : (p.amount || 0)) / T.total * 100).toFixed(1)}%` : '—'}</div><div style={{fontSize:'.8rem',color:'#8794a8'}}>평가 {fmtUsd(v ? v.equity : p.amount)}</div></div>
                 <div className="pos-verdict">
                   {st ? <div style={{fontWeight:800,color:st.color,fontSize:'.86rem'}}>{st.icon} {st.label} <span style={{fontWeight:500,color:'#8794a8'}}>{st.sub}</span></div> : <div style={{color:'#8794a8',fontSize:'.8rem'}}>{a?.error ? '판정 실패' : '판정 계산 중'}</div>}
                   {adv && <div style={{fontSize:'.84rem',fontWeight:700,color: adv.sev === 'danger' ? '#f87171' : adv.sev === 'warn' ? '#fbbf24' : '#4ade80'}}>{adv.headline}</div>}
@@ -3500,7 +3522,7 @@ function TickerPositions({report, onOpenPositions}) {
             <div style={{fontSize:'.84rem',color:'#cbd5e1',marginBottom:8}}>
               <b>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</b> · 평단 {fmtPx(p.avg, ticker)} · 투입 {fmtUsd(p.amount)}
               {v && <> · 손익 <b style={{color: pnlCol(v.pnlPct)}}>{sgnPct(v.pnlPct)} ({fmtUsd(v.pnl)})</b></>}
-              {T.total > 0 && <> · 비중 {(p.amount / T.total * 100).toFixed(1)}%</>}
+              {T.total > 0 && v && <> · 비중 {(v.equity / T.total * 100).toFixed(1)}% (평가 {fmtUsd(v.equity)})</>}
             </div>
             <AdviceView adv={adv} ticker={ticker} amount={p.amount} stance={stanceOf(report)} deriv={deriv.data}/>
           </div>
