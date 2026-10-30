@@ -9,7 +9,9 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-height:100vh}
+html{font-size:17px}
+@media(max-width:600px){html{font-size:16.5px}}
+body{background:#0f172a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif;min-height:100vh;line-height:1.55;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
 .app-header{background:linear-gradient(135deg,#1e293b,#0f172a);border-bottom:1px solid #334155;padding:16px 24px;display:flex;align-items:center;gap:12px}
 .app-header h1{font-size:1.5rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .app-header .subtitle{font-size:.8rem;color:#8794a8}
@@ -19,7 +21,7 @@ body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-heig
 .tab-btn.active{background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;font-weight:600}
 .main-content{padding:24px;max-width:1400px;margin:0 auto}
 .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px;margin-bottom:16px}
-.card-title{font-size:1rem;font-weight:600;color:#94a3b8;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.card-title{font-size:1.1rem;font-weight:700;color:#f1f5f9;margin-bottom:16px;display:flex;align-items:center;gap:8px;letter-spacing:-0.01em}
 input,select,textarea{background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:10px 14px;font-size:.9rem;width:100%;outline:none;transition:border .2s}
 input:focus,select:focus,textarea:focus{border-color:#3b82f6}
 button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:.9rem;font-weight:600;transition:all .2s}
@@ -32,7 +34,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:
 .btn-danger:hover{opacity:.9}
 .btn-success{background:#10b981;color:#fff}
 .btn-success:hover{opacity:.9}
-.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:700}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.8rem;font-weight:700}
 .badge-green{background:#064e3b;color:#34d399}
 .badge-red{background:#450a0a;color:#f87171}
 .badge-yellow{background:#451a03;color:#fbbf24}
@@ -55,7 +57,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:
 .seg-tabs button{border-radius:0;padding:7px 16px;font-size:.82rem;background:#0f172a;color:#94a3b8}
 .seg-tabs button.on{background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff}
 .action-box{margin:0 0 14px;padding:12px 14px;border-radius:10px;background:#0a0f1a;border:1px solid #1e293b;font-size:.92rem;line-height:1.6;color:#e2e8f0}
-.action-box .k{font-size:.74rem;font-weight:700;letter-spacing:.06em;color:#94a3b8;margin-right:8px}
+.action-box .k{font-size:.8rem;font-weight:700;letter-spacing:.02em;color:#cbd5e1;margin-right:8px}
 .score-row{display:grid;grid-template-columns:minmax(110px,1.1fr) minmax(80px,1.4fr) minmax(0,2.2fr);gap:10px;align-items:center;padding:5px 0;font-size:.8rem}
 .price-tags{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
 .fib-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -71,6 +73,10 @@ details>summary::before{content:'▸ ';color:#8794a8}
 details[open]>summary::before{content:'▾ '}
 @media(max-width:600px){
   .main-content{padding:12px}
+  .app-header{padding:12px 14px}
+  .app-header .subtitle{display:none}
+  .app-header h1{font-size:1.2rem;white-space:nowrap}
+  .app-header .badge{white-space:nowrap;font-size:.72rem}
   .card{padding:14px;border-radius:10px}
   .score-row{grid-template-columns:1fr auto;gap:4px 10px;padding:7px 0;border-bottom:1px solid #111827}
   .score-row .bar{grid-column:1 / -1;order:3}
@@ -80,7 +86,7 @@ details[open]>summary::before{content:'▾ '}
   .plan-table .col-sub{display:none}
   .pos-row{grid-template-columns:1fr 1fr;gap:8px 12px}
   .pos-verdict{grid-column:1 / -1;text-align:left}
-  .plan-table .mob-only{display:block;font-size:.72rem;color:#94a3b8;font-weight:500;margin-top:2px;white-space:normal}
+  .plan-table .mob-only{display:block;font-size:.8rem;color:#94a3b8;font-weight:500;margin-top:2px;white-space:normal}
   .plan-table td:first-child{white-space:normal !important}
   .plan-table td:nth-child(2){font-size:.84rem !important}
   .plan-table td,.plan-table th{padding:9px 8px !important}
@@ -94,13 +100,13 @@ details[open]>summary::before{content:'▾ '}
 .chart-img{width:100%;border-radius:8px;border:1px solid #334155;margin-top:8px}
 .stat-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;text-align:center}
 .stat-value{font-size:1.5rem;font-weight:700;color:#60a5fa}
-.stat-label{font-size:.8rem;color:#8794a8;margin-top:4px}
+.stat-label{font-size:.84rem;color:#94a3b8;margin-top:4px}
 .pos-long{color:#34d399}
 .pos-short{color:#f87171}
 .pos-hold{color:#fbbf24}
 .pos-none{color:#94a3b8}
 table{width:100%;border-collapse:collapse}
-th{background:#0f172a;padding:10px 12px;text-align:left;font-size:.8rem;color:#8794a8;border-bottom:1px solid #334155}
+th{background:#0f172a;padding:10px 12px;text-align:left;font-size:.84rem;color:#94a3b8;border-bottom:1px solid #334155}
 td{padding:10px 12px;font-size:.85rem;border-bottom:1px solid #1e293b}
 tr:hover td{background:#0f172a}
 .settings-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;justify-content:flex-end}
@@ -1766,7 +1772,7 @@ function buildCandleChart(candles, ticker='', w=960, ch=290, vh=65, rh=58) {
     const txt=fp>=1?fp.toFixed(2):fp.toPrecision(4);
     const lw=txt.length*6+10, lx=120;
     return `<rect id="cs-fb${i}" data-fp="${fp}" x="${lx}" y="${(fy-7).toFixed(1)}" width="${lw}" height="13" fill="#0b0e14" opacity="0.88" rx="2" stroke="${FC[i]}" stroke-width="0.7"/>` +
-           `<text id="cs-ft${i}" data-fp="${fp}" x="${lx+lw/2}" y="${(fy+3).toFixed(1)}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace" text-anchor="middle">${txt}</text>`;
+           `<text id="cs-ft${i}" data-fp="${fp}" x="${lx+lw/2}" y="${(fy+3).toFixed(1)}" fill="${FC[i]}" font-size="11" font-weight="700" font-family="monospace" text-anchor="middle">${txt}</text>`;
   }).join(''):'';
 
   // RSI panel
@@ -1781,9 +1787,9 @@ function buildCandleChart(candles, ticker='', w=960, ch=290, vh=65, rh=58) {
 <line x1="0" y1="${toRY(50).toFixed(1)}" x2="${w}" y2="${toRY(50).toFixed(1)}" stroke="#475569" stroke-width="0.5" opacity="0.35"/>
 <line x1="0" y1="${toRY(30).toFixed(1)}" x2="${w}" y2="${toRY(30).toFixed(1)}" stroke="#4ade80" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.6"/>`;
   const rsiLine=rsiPts.length>=2?`<polyline points="${rsiPts.join(' ')}" fill="none" stroke="${rsiCol}" stroke-width="1.5" vector-effect="non-scaling-stroke" opacity="0.95"/>`:'';
-  const rsiLabels=`<text x="4" y="${rsiTop+12}" fill="#cbd5e1" font-size="11" font-weight="700">RSI(14)</text>
-<text x="54" y="${(toRY(70)-3).toFixed(1)}" fill="#ef4444" font-size="10" font-weight="700">70</text>
-<text x="54" y="${(toRY(30)+11).toFixed(1)}" fill="#4ade80" font-size="10" font-weight="700">30</text>
+  const rsiLabels=`<text x="4" y="${rsiTop+12}" fill="#cbd5e1" font-size="12" font-weight="700">RSI(14)</text>
+<text x="54" y="${(toRY(70)-3).toFixed(1)}" fill="#ef4444" font-size="11" font-weight="700">70</text>
+<text x="54" y="${(toRY(30)+11).toFixed(1)}" fill="#4ade80" font-size="11" font-weight="700">30</text>
 ${currRSI!=null?`<text x="${w-4}" y="${rsiTop+12}" fill="${rsiCol}" font-size="12" text-anchor="end" font-weight="800">RSI ${currRSI.toFixed(1)}</text>`:''}`;
 
   // Grid (IDs so JS can update labels on zoom)
@@ -1791,7 +1797,7 @@ ${currRSI!=null?`<text x="${w-4}" y="${rsiTop+12}" fill="${rsiCol}" font-size="1
     const y=ch-t*ch, p=minP+t*rangeP;
     const lbl=p>=1?p.toFixed(2):p.toPrecision(4);
     return `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#243045" stroke-width="0.4" opacity="0.45"/>` +
-           (y>80?`<text id="cs-gl${i}" x="4" y="${(y-3).toFixed(1)}" fill="#94a3b8" font-size="10" font-weight="600">${lbl}</text>`:'');
+           (y>80?`<text id="cs-gl${i}" x="4" y="${(y-3).toFixed(1)}" fill="#94a3b8" font-size="11" font-weight="600">${lbl}</text>`:'');
   }).join('');
 
   // Time axis labels (updated by JS on zoom)
@@ -1802,35 +1808,35 @@ ${currRSI!=null?`<text x="${w-4}" y="${rsiTop+12}" fill="${rsiCol}" font-size="1
     let lbl='';
     if(c.t){const d=new Date(c.t);lbl=`${d.getMonth()+1}/${d.getDate()}`;}
     else if(typeof c.date==='string') lbl=c.date.slice(5,10);
-    return acc+`<text id="cs-tl${i}" x="${x.toFixed(1)}" y="${totalH-4}" fill="#52525b" font-size="10" text-anchor="middle">${lbl}</text>`;
+    return acc+`<text id="cs-tl${i}" x="${x.toFixed(1)}" y="${totalH-4}" fill="#52525b" font-size="11" text-anchor="middle">${lbl}</text>`;
   },'');
 
   // Legend
   const legend=`<rect x="4" y="4" width="112" height="72" fill="#0b0e14" opacity="0.88" rx="3" stroke="#243045" stroke-width="0.5"/>
-<text x="12" y="20" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace">━ MA7</text>
-<text x="12" y="35" fill="#60a5fa" font-size="11" font-weight="700" font-family="monospace">━ MA25</text>
-<text x="12" y="50" fill="#a78bfa" font-size="11" font-weight="700" font-family="monospace">━ MA99</text>
-<text x="12" y="65" fill="#ec4899" font-size="11" font-weight="800" font-family="monospace">━ VWMA100</text>`;
+<text x="12" y="20" fill="#fbbf24" font-size="12" font-weight="700" font-family="monospace">━ MA7</text>
+<text x="12" y="35" fill="#60a5fa" font-size="12" font-weight="700" font-family="monospace">━ MA25</text>
+<text x="12" y="50" fill="#a78bfa" font-size="12" font-weight="700" font-family="monospace">━ MA99</text>
+<text x="12" y="65" fill="#ec4899" font-size="12" font-weight="800" font-family="monospace">━ VWMA100</text>`;
 
   // Fib legend (bottom-left)
   const fbx=4, fby=ch-92;
   const fibBox=fR>0?`<rect x="${fbx}" y="${fby}" width="172" height="84" fill="#0b0e14" opacity="0.88" rx="3" stroke="#243045" stroke-width="0.5"/>
-<text x="${fbx+8}" y="${fby+12}" fill="#94a3b8" font-size="10" font-weight="700">Fib · 90봉 기준</text>
-${FR.map((r,i)=>{const fp=fH-r*fR,lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);return `<text x="${fbx+8}" y="${fby+26+i*13}" fill="${FC[i]}" font-size="10" font-weight="700" font-family="monospace">Fib ${r}  ${lbl}</text>`;}).join('')}`:'';
+<text x="${fbx+8}" y="${fby+12}" fill="#94a3b8" font-size="11" font-weight="700">Fib · 90봉 기준</text>
+${FR.map((r,i)=>{const fp=fH-r*fR,lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);return `<text x="${fbx+8}" y="${fby+26+i*13}" fill="${FC[i]}" font-size="11" font-weight="700" font-family="monospace">Fib ${r}  ${lbl}</text>`;}).join('')}`:'';
 
   const divider=`<line x1="0" y1="${ch+6}" x2="${w}" y2="${ch+6}" stroke="#243045" stroke-width="0.5"/>`;
-  const volLabel=`<text x="4" y="${ch+14}" fill="#94a3b8" font-size="10" font-weight="600">Vol</text>`;
+  const volLabel=`<text x="4" y="${ch+14}" fill="#94a3b8" font-size="11" font-weight="600">Vol</text>`;
 
   // OHLC tooltip
   const tooltip=`<g id="cs-tip" style="display:none;pointer-events:none;">
 <rect id="cs-tip-bg" x="0" y="0" width="166" height="106" fill="#0b0e14" opacity="0.96" rx="4" stroke="#334155" stroke-width="0.7"/>
-<text id="cs-tip-dt"  x="0" y="0" fill="#e2e8f0" font-size="11" font-weight="800" font-family="monospace"/>
-<text id="cs-tip-o"   x="0" y="0" fill="#94a3b8" font-size="11" font-family="monospace"/>
-<text id="cs-tip-h"   x="0" y="0" fill="#4ade80" font-size="11" font-family="monospace"/>
-<text id="cs-tip-l"   x="0" y="0" fill="#f87171" font-size="11" font-family="monospace"/>
-<text id="cs-tip-c"   x="0" y="0" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace"/>
-<text id="cs-tip-v"   x="0" y="0" fill="#a78bfa" font-size="11" font-family="monospace"/>
-<text id="cs-tip-chg" x="0" y="0" font-size="11" font-weight="700" font-family="monospace"/>
+<text id="cs-tip-dt"  x="0" y="0" fill="#e2e8f0" font-size="12" font-weight="800" font-family="monospace"/>
+<text id="cs-tip-o"   x="0" y="0" fill="#94a3b8" font-size="12" font-family="monospace"/>
+<text id="cs-tip-h"   x="0" y="0" fill="#4ade80" font-size="12" font-family="monospace"/>
+<text id="cs-tip-l"   x="0" y="0" fill="#f87171" font-size="12" font-family="monospace"/>
+<text id="cs-tip-c"   x="0" y="0" fill="#fbbf24" font-size="12" font-weight="700" font-family="monospace"/>
+<text id="cs-tip-v"   x="0" y="0" fill="#a78bfa" font-size="12" font-family="monospace"/>
+<text id="cs-tip-chg" x="0" y="0" font-size="12" font-weight="700" font-family="monospace"/>
 </g>`;
 
   // Crosshair
@@ -1838,9 +1844,9 @@ ${FR.map((r,i)=>{const fp=fH-r*fR,lbl=fp>=1?fp.toFixed(2):fp.toPrecision(4);retu
 <line id="cs-vl" x1="0" y1="0" x2="0" y2="${totalH-14}" stroke="#94a3b8" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.55"/>
 <line id="cs-hl" x1="0" y1="0" x2="${w}" y2="0" stroke="#94a3b8" stroke-width="0.6" stroke-dasharray="3,3" opacity="0.55"/>
 <rect id="cs-pb" x="0" y="0" width="86" height="15" fill="#1e293b" stroke="#fbbf24" stroke-width="0.6" rx="2"/>
-<text id="cs-pt" x="0" y="0" fill="#fbbf24" font-size="11" font-weight="700" font-family="monospace" text-anchor="middle"/>
+<text id="cs-pt" x="0" y="0" fill="#fbbf24" font-size="12" font-weight="700" font-family="monospace" text-anchor="middle"/>
 <rect id="cs-db" x="0" y="${totalH-17}" width="72" height="14" fill="#1e293b" stroke="#475569" stroke-width="0.5" rx="2"/>
-<text id="cs-dt" x="0" y="${totalH-6}" fill="#94a3b8" font-size="10" font-weight="600" font-family="monospace" text-anchor="middle"/>
+<text id="cs-dt" x="0" y="${totalH-6}" fill="#94a3b8" font-size="11" font-weight="600" font-family="monospace" text-anchor="middle"/>
 </g>`;
 
   window.__csChart={candles,w,ch,vh,rh,rsiTop,totalH,minP,maxP,rangeP,maxV,barW,totalSlots,EXTRA};
@@ -2594,7 +2600,7 @@ function MaRow({label, maVal, price}) {
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #1e293b',fontSize:'.82rem'}}>
       <span style={{color:'#94a3b8',minWidth:80}}>{label}</span>
       <span style={{color:'#e2e8f0',fontVariantNumeric:'tabular-nums'}}>${fp(maVal)}</span>
-      <span style={{color: above ? '#34d399' : '#f87171', fontSize:'.78rem'}}>
+      <span style={{color: above ? '#34d399' : '#f87171', fontSize:'.84rem'}}>
         {above ? '▲' : '▼'} {fmtPct(pct)}
       </span>
     </div>
@@ -2620,7 +2626,7 @@ function ComputedTechSection({computed}) {
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #1e293b',fontSize:'.82rem',marginBottom:4}}>
         <span style={{color:'#94a3b8'}}>RSI(14)</span>
         <span style={{color:rsiColor,fontWeight:700}}>{rsi14 != null ? rsi14.toFixed(1) : '—'}</span>
-        <span style={{color:rsiColor,fontSize:'.78rem'}}>{rsiLabel}</span>
+        <span style={{color:rsiColor,fontSize:'.84rem'}}>{rsiLabel}</span>
       </div>
 
       {/* Moving Averages */}
@@ -2658,24 +2664,24 @@ function FibSection({computed, ticker}) {
       <div className="fib-grid" style={{marginTop:12}}>
         {/* Retracements */}
         <div>
-          <div style={{color:'#8794a8',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '되돌림 (반등 시 저항)' : '되돌림 (지지)'}</div>
+          <div style={{color:'#8794a8',fontSize:'.82rem',marginBottom:6}}>{computed.fibDir==='down' ? '되돌림 (반등 시 저항)' : '되돌림 (지지)'}</div>
           {fibs.map(f => (
             <div key={f.level} className="fib-row">
               <span style={{color:'#94a3b8'}}>Fib {f.level}</span>
               <span style={{color:'#e2e8f0'}}>{cs}{fp(f.price)}</span>
-              <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
+              <span style={{color:pctColor(f.pct),fontSize:'.82rem'}}>{fmtPct(f.pct)}</span>
             </div>
           ))}
         </div>
 
         {/* Extensions */}
         <div>
-          <div style={{color:'#8794a8',fontSize:'.75rem',marginBottom:6}}>{computed.fibDir==='down' ? '확장 (하락 목표)' : '확장 (목표)'}</div>
+          <div style={{color:'#8794a8',fontSize:'.82rem',marginBottom:6}}>{computed.fibDir==='down' ? '확장 (하락 목표)' : '확장 (목표)'}</div>
           {fibExts.map(f => (
             <div key={f.level} className="fib-row">
               <span style={{color:'#94a3b8'}}>Ext {f.level}</span>
               <span style={{color:'#e2e8f0'}}>{cs}{fp(f.price)}</span>
-              <span style={{color:pctColor(f.pct),fontSize:'.75rem'}}>{fmtPct(f.pct)}</span>
+              <span style={{color:pctColor(f.pct),fontSize:'.82rem'}}>{fmtPct(f.pct)}</span>
             </div>
           ))}
         </div>
@@ -2684,13 +2690,13 @@ function FibSection({computed, ticker}) {
       {/* Round numbers */}
       {rounds && rounds.length > 0 && (
         <div style={{marginTop:10}}>
-          <div style={{color:'#8794a8',fontSize:'.75rem',marginBottom:6}}>심리적 라운드넘버</div>
+          <div style={{color:'#8794a8',fontSize:'.82rem',marginBottom:6}}>심리적 라운드넘버</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
             {rounds.map(r => (
               <span key={r.level} style={{
                 background: r.role === '저항' ? '#450a0a' : '#064e3b',
                 color: r.role === '저항' ? '#f87171' : '#34d399',
-                borderRadius:4, padding:'2px 8px', fontSize:'.78rem',
+                borderRadius:4, padding:'2px 8px', fontSize:'.84rem',
               }}>
                 {cs}{fp(r.level)} {fmtPct(r.pct)} ({r.role})
               </span>
@@ -2708,7 +2714,7 @@ function TradePlanSection({computed, report}) {
   const ticker = report?.ticker;
   const stance = stanceOf(report);
   if (stance === 'avoid') return (
-    <div style={{background:'#0a0f1a',border:'1px solid #7f1d1d',borderRadius:10,padding:'14px 16px',marginBottom:12,fontSize:'.83rem',color:'#fca5a5',lineHeight:1.7}}>
+    <div style={{background:'#172338',border:'1px solid #7f1d1d',borderRadius:10,padding:'14px 16px',marginBottom:12,fontSize:'.83rem',color:'#fca5a5',lineHeight:1.7}}>
       ✕ <b>매수 회피 구간</b> — 지표 점수가 −25 이하라 매수 플랜을 제시하지 않습니다.<br/>
       <span style={{color:'#8794a8'}}>숏(공매도) 플랜은 제공하지 않습니다. 과거 검증(코인 10종, 2019~2026)에서 하락 신호의 예측력이 확인되지 않았습니다.</span>
     </div>
@@ -2719,22 +2725,22 @@ function TradePlanSection({computed, report}) {
   const Row = ({k, v, sub, color}) => (
     <div style={{display:'grid',gridTemplateColumns:'minmax(110px,160px) 1fr',gap:10,padding:'10px 12px',borderBottom:'1px solid #0f172a',alignItems:'baseline'}}>
       <span style={{color:'#94a3b8',fontSize:'.84rem',fontWeight:600}}>{k}</span>
-      <span><b style={{color:color||'#e2e8f0',fontFamily:'monospace',fontSize:'.95rem'}}>{v}</b>{sub && <span style={{color:'#8794a8',fontSize:'.78rem',marginLeft:8}}>{sub}</span>}</span>
+      <span><b style={{color:color||'#e2e8f0',fontFamily:'monospace',fontSize:'.95rem'}}>{v}</b>{sub && <span style={{color:'#8794a8',fontSize:'.84rem',marginLeft:8}}>{sub}</span>}</span>
     </div>
   );
   return (
-    <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+    <div style={{background:'#172338',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8,padding:'10px 12px',borderBottom:'1px solid #1e293b',background:'#0f172a'}}>
         <span style={{fontWeight:800,fontSize:'.85rem',color:'#4ade80'}}>▲ 롱 플랜 · 추적 손절</span>
-        {stance==='neutral' && <span style={{fontSize:'.76rem',color:'#fbbf24'}}>⚠ 관망 구간(점수 ±25 이내) — 판정이 롱이 될 때만 진입하는 규칙입니다</span>}
-        {stance==='bear' && <span style={{fontSize:'.76rem',color:'#fb923c'}}>⚠ BTC가 200일선 아래 — 규칙상 진입하지 않는 구간입니다</span>}
+        {stance==='neutral' && <span style={{fontSize:'.82rem',color:'#fbbf24'}}>⚠ 관망 구간(점수 ±25 이내) — 판정이 롱이 될 때만 진입하는 규칙입니다</span>}
+        {stance==='bear' && <span style={{fontSize:'.82rem',color:'#fb923c'}}>⚠ BTC가 200일선 아래 — 규칙상 진입하지 않는 구간입니다</span>}
       </div>
       <Row k="진입" v={fmtPx(plan.entry1, ticker)} sub="판정이 롱인 봉의 다음 봉 시가 (≈ 현재가)"/>
       <Row k="초기 손절" v={fmtPx(plan.stopLoss, ticker)} color="#fb923c" sub={`진입가 − 3×ATR (−${riskPct.toFixed(2)}%)`}/>
       <Row k="추적 손절" v={`최고 종가 − 3×ATR`} sub={`현재 3 ATR = ${fmtPx(3*plan.atr, ticker)} · 손절선은 올리기만 함`}/>
       <Row k="익절" v="없음" sub="추적 손절에 걸릴 때 청산 — 고정 익절은 큰 상승을 잘라 과거 성과를 깎았습니다"/>
       <Row k="권장 비중" v={`총자산의 ${size1.toFixed(0)}%`} color="#93c5fd" sub={`손절 시 계좌 손실을 1%로 맞추는 비중 (1% ÷ ${riskPct.toFixed(2)}%)`}/>
-      <div style={{padding:'8px 12px',background:'#080d18',fontSize:'.76rem',color:'#8794a8',lineHeight:1.6}}>
+      <div style={{padding:'8px 12px',background:'#142035',fontSize:'.82rem',color:'#8794a8',lineHeight:1.6}}>
         이 규칙은 54개 코인(상장폐지 포함)·2020~2026 검증에서 기존 '눌림 지정가 + 고정 익절' 플랜보다 모든 시험에서 나았지만,
         2023~2026에는 BTC를 그냥 보유하는 것보다 수익이 낮았습니다(대신 최대 낙폭이 작음). 위 "과거 성과" 카드를 함께 보세요.
       </div>
@@ -2759,7 +2765,7 @@ function ReportHero({report, aiPending}) {
   const stats = report.stats;          // 과거 실측 (코인 일봉만)
   const ticker = (report.ticker||'').toUpperCase();
   const letter = ticker[0] || '?';
-  const R = 28, circ = 2*Math.PI*R, dash = circ*(1-(stats ? stats.up : 0)/100);
+  const R = 36, circ = 2*Math.PI*R, dash = circ*(1-(stats ? stats.up : 0)/100);
   const palette = {
     pos:{bg:'#052e16',border:'#166534',color:'#4ade80'},
     neg:{bg:'#450a0a',border:'#7f1d1d',color:'#f87171'},
@@ -2788,19 +2794,19 @@ function ReportHero({report, aiPending}) {
           <div style={{background:st.bg,border:`1.5px solid ${st.border}`,borderRadius:12,padding:'10px 22px',textAlign:'center',minWidth:110}}
                title="판정은 AI가 아니라 지표 점수(롱 ≥ +25, 매수 회피 ≤ −25)와 BTC 200일선 필터로 결정됩니다">
             <div style={{fontSize:'1.15rem',fontWeight:900,color:st.color,letterSpacing:'0.04em'}}>{st.icon} {st.label}</div>
-            <div style={{fontSize:'.74rem',color:st.color+'99',marginTop:2}}>
+            <div style={{fontSize:'.8rem',color:st.color+'99',marginTop:2}}>
               {st.sub}{report.score!=null ? ` · 점수 ${report.score>0?'+':''}${report.score}` : ''}
             </div>
           </div>
-          <div style={{position:'relative',width:74,height:74,flexShrink:0}}
+          <div style={{position:'relative',width:90,height:90,flexShrink:0}}
                title={stats ? `과거 실측: 코인 10종 일봉 ${EMPIRICAL_CRYPTO_1D.period}, 같은 판정 구간 ${stats.n}회 중 20일 후 상승 비율` : '코인 일봉 외에는 과거 검증 데이터가 없습니다'}>
-            <svg width="74" height="74" style={{transform:'rotate(-90deg)',display:'block'}}>
-              <circle cx="37" cy="37" r={R} fill="none" stroke="#1e293b" strokeWidth="6"/>
-              {stats && <circle cx="37" cy="37" r={R} fill="none" stroke={st.color} strokeWidth="6" strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>}
+            <svg width="90" height="90" style={{transform:'rotate(-90deg)',display:'block'}}>
+              <circle cx="45" cy="45" r={R} fill="none" stroke="#1e293b" strokeWidth="6"/>
+              {stats && <circle cx="45" cy="45" r={R} fill="none" stroke={st.color} strokeWidth="6" strokeDasharray={circ} strokeDashoffset={dash} strokeLinecap="round"/>}
             </svg>
             <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
               <span style={{fontSize:'1.05rem',fontWeight:800,color:'#f8fafc',lineHeight:1}}>{stats ? `${Math.round(stats.up)}%` : '—'}</span>
-              <span style={{fontSize:'.66rem',color:'#8794a8',marginTop:2,textAlign:'center',lineHeight:1.15}}>{stats ? <>과거 20일<br/>상승 비율</> : <>검증<br/>데이터 없음</>}</span>
+              <span style={{fontSize:'.62rem',color:'#94a3b8',marginTop:2,textAlign:'center',lineHeight:1.2}}>{stats ? <>과거 20일<br/>상승 비율</> : <>검증<br/>데이터 없음</>}</span>
             </div>
           </div>
           {report.risk_level && (
@@ -2826,7 +2832,7 @@ function ReportHero({report, aiPending}) {
         );
       })()}
       {(stats || report.regime || report.rs) && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:'6px 16px',fontSize:'.76rem',color:'#8794a8',marginBottom:12,padding:'8px 12px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8}}>
+        <div style={{display:'flex',flexWrap:'wrap',gap:'6px 16px',fontSize:'.82rem',color:'#8794a8',marginBottom:12,padding:'8px 12px',background:'#172338',border:'1px solid #1e293b',borderRadius:8}}>
           {stats && <span>📊 과거 실측 ({EMPIRICAL_CRYPTO_1D.period}, n={stats.n}): 20일 후 평균 <b style={{color:stats.avg>=0?'#4ade80':'#f87171'}}>{stats.avg>=0?'+':''}{stats.avg}%</b> · 중앙값 <b style={{color:stats.med>=0?'#4ade80':'#f87171'}}>{stats.med>=0?'+':''}{stats.med}%</b> <span style={{color:'#8794a8'}}>(전체 평균 +{EMPIRICAL_CRYPTO_1D.all.avg}% · 상승 {EMPIRICAL_CRYPTO_1D.all.up}%)</span></span>}
           {report.rs && <span>📐 BTC 대비 90일 <b style={{color: report.rs.rel >= 0 ? '#4ade80' : '#f87171'}}>{report.rs.rel >= 0 ? '+' : ''}{(report.rs.rel*100).toFixed(1)}%</b> <span style={{color:'#8794a8'}}>({report.ticker} {(report.rs.coin90*100).toFixed(1)}% vs BTC {(report.rs.btc90*100).toFixed(1)}%{report.rs.rel < 0 ? ' · BTC보다 약함' : ' · BTC보다 강함'} · 참고용)</span></span>}
           {report.regime && (report.regime.unknown
@@ -2836,11 +2842,11 @@ function ReportHero({report, aiPending}) {
       )}
       {report.signals?.length>0 && (
         <div>
-          <div style={{fontSize:'.76rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.1em',marginBottom:6}}>KEY SIGNALS (지표 기반)</div>
+          <div style={{fontSize:'.9rem',fontWeight:700,color:'#cbd5e1',letterSpacing:'0',marginBottom:6}}>KEY SIGNALS (지표 기반)</div>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
             {report.signals.map((s,i)=>{
               const c = palette[report.signalsTone?.[i]] || palette.neu;
-              return <span key={i} style={{background:c.bg,border:`1px solid ${c.border}`,color:c.color,borderRadius:20,padding:'4px 12px',fontSize:'.78rem',fontWeight:600}}>{s}</span>;
+              return <span key={i} style={{background:c.bg,border:`1px solid ${c.border}`,color:c.color,borderRadius:20,padding:'4px 12px',fontSize:'.84rem',fontWeight:600}}>{s}</span>;
             })}
           </div>
         </div>
@@ -2873,10 +2879,10 @@ function AnalysisSection({report}) {
     const n=Number(val), pct=curPrice?((n-curPrice)/curPrice*100):null;
     const dc=pct==null?'#64748b':pct>=0?'#4ade80':'#f87171';
     return (
-      <div style={{minWidth:0,background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 8px',textAlign:'center'}}>
-        <div style={{fontSize:'.74rem',color:'#8794a8',fontWeight:600,marginBottom:4}}>{icon} {label}</div>
+      <div style={{minWidth:0,background:'#172338',border:'1px solid #1e293b',borderRadius:10,padding:'12px 8px',textAlign:'center'}}>
+        <div style={{fontSize:'.8rem',color:'#8794a8',fontWeight:600,marginBottom:4}}>{icon} {label}</div>
         <div style={{fontSize:'.98rem',fontWeight:800,color,fontFamily:'monospace',overflowWrap:'anywhere'}}>{fmtPx(val,ticker)}</div>
-        {pct!=null && <div style={{fontSize:'.76rem',fontWeight:700,color:dc,marginTop:3}}>{pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`}</div>}
+        {pct!=null && <div style={{fontSize:'.82rem',fontWeight:700,color:dc,marginTop:3}}>{pct>=0?`▲ +${pct.toFixed(1)}%`:`▼ ${pct.toFixed(1)}%`}</div>}
       </div>
     );
   };
@@ -2905,10 +2911,10 @@ function AnalysisSection({report}) {
 
       {/* 지표 점수 분해 */}
       {report.scoreBreakdown && (
-        <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,padding:'12px 14px',marginBottom:16}}>
+        <div style={{background:'#172338',border:'1px solid #1e293b',borderRadius:10,padding:'12px 14px',marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:6}}>
-            <span style={{fontSize:'.75rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em'}}>🧮 지표 점수 분해</span>
-            <span style={{fontSize:'.78rem',color:'#8794a8'}}>
+            <span style={{fontSize:'.95rem',fontWeight:700,color:'#e2e8f0',letterSpacing:'-0.01em'}}>🧮 지표 점수 분해</span>
+            <span style={{fontSize:'.84rem',color:'#8794a8'}}>
               합계 <b style={{color:report.score>=25?'#4ade80':report.score<=-25?'#f87171':'#fbbf24',fontSize:'.95rem'}}>{report.score>0?'+':''}{report.score}</b> / ±100 · 롱 ≥ +25 · 매수 회피 ≤ −25
             </span>
           </div>
@@ -2932,7 +2938,7 @@ function AnalysisSection({report}) {
 
       {/* 매매 플랜 */}
       <div style={{marginBottom:16}}>
-        <div style={{fontSize:'.75rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반 · 롱 전용)</div>
+        <div style={{fontSize:'.95rem',fontWeight:700,color:'#e2e8f0',letterSpacing:'-0.01em',marginBottom:8}}>🎯 매매 플랜 (지표 계산 기반 · 롱 전용)</div>
         <TradePlanSection computed={computed} report={report}/>
       </div>
 
@@ -2945,21 +2951,21 @@ function AnalysisSection({report}) {
 
       {/* 기술 지표 좌우 분할 */}
       {computed && (
-        <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
-          <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em'}}>기술 지표</div>
+        <div style={{background:'#172338',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+          <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.95rem',fontWeight:700,color:'#e2e8f0',letterSpacing:'-0.01em'}}>기술 지표</div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:0}}>
             <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
               <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
                 <div style={{fontSize:'1.4rem',lineHeight:1}}>📈</div>
                 <div style={{minWidth:0}}>
-                  <div style={{fontSize:'.76rem',fontWeight:700,color:'#60a5fa',letterSpacing:'0.08em',marginBottom:6}}>요약</div>
+                  <div style={{fontSize:'.82rem',fontWeight:700,color:'#60a5fa',letterSpacing:'0.08em',marginBottom:6}}>요약</div>
                   {tech ? (
                     <>
                       <div style={{fontSize:'.82rem',color:'#94a3b8',lineHeight:1.7}}>
                         {techExpanded ? tech : tech.slice(0,140)+(tech.length>140?'…':'')}
                       </div>
                       {tech.length>140 && (
-                        <button onClick={()=>setTechExpanded(v=>!v)} style={{marginTop:8,background:'none',border:'none',color:'#3b82f6',cursor:'pointer',fontSize:'.78rem',padding:0,fontWeight:600}}>
+                        <button onClick={()=>setTechExpanded(v=>!v)} style={{marginTop:8,background:'none',border:'none',color:'#3b82f6',cursor:'pointer',fontSize:'.84rem',padding:0,fontWeight:600}}>
                           {techExpanded?'접기 ▲':'전체 보기 ▼'}
                         </button>
                       )}
@@ -2968,7 +2974,7 @@ function AnalysisSection({report}) {
                     <div style={{fontSize:'.8rem',color:'#8794a8'}}>AI 해설 대기 중 — 아래는 지표에서 직접 계산한 사실입니다.</div>
                   )}
                   {facts.length>0 && (
-                    <ul style={{margin:'10px 0 0',paddingLeft:16,fontSize:'.78rem',color:'#8794a8',lineHeight:1.7}}>
+                    <ul style={{margin:'10px 0 0',paddingLeft:16,fontSize:'.84rem',color:'#8794a8',lineHeight:1.7}}>
                       {facts.map((f,i)=><li key={i}>{f}</li>)}
                     </ul>
                   )}
@@ -3069,10 +3075,10 @@ function DerivativesCard({report}) {
   const pct = (v, d=3) => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v*100).toFixed(d)}%`;
   const big = v => v == null ? '—' : v >= 1e9 ? `$${(v/1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v/1e6).toFixed(1)}M` : `$${Math.round(v).toLocaleString()}`;
   const Box = ({label, value, sub, color}) => (
-    <div style={{minWidth:0,background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
-      <div style={{fontSize:'.74rem',color:'#8794a8',marginBottom:3}}>{label}</div>
+    <div style={{minWidth:0,background:'#172338',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
+      <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:3}}>{label}</div>
       <div style={{fontSize:'.98rem',fontWeight:800,color:color||'#e2e8f0',fontFamily:'monospace'}}>{value}</div>
-      {sub && <div style={{fontSize:'.74rem',color:'#8794a8',marginTop:3,lineHeight:1.5}}>{sub}</div>}
+      {sub && <div style={{fontSize:'.8rem',color:'#8794a8',marginTop:3,lineHeight:1.5}}>{sub}</div>}
     </div>
   );
   return (
@@ -3093,7 +3099,7 @@ function DerivativesCard({report}) {
           <Box label="전체 계정 롱숏 비율" value={data.lsNow == null ? '—' : data.lsNow.toFixed(2)}
                sub={`롱 계정 ${data.lsLongPct == null ? '—' : (data.lsLongPct*100).toFixed(0)+'%'} · 최근 30일 중 ${data.lsPct30 == null ? '—' : data.lsPct30 >= 0.67 ? '높은 편' : data.lsPct30 <= 0.33 ? '낮은 편' : '중간'}`}/>
         </div>
-        <div style={{fontSize:'.76rem',color:'#8794a8',lineHeight:1.6}}>
+        <div style={{fontSize:'.82rem',color:'#8794a8',lineHeight:1.6}}>
           테이커 매수/매도 비율 {data.takerNow == null ? '—' : data.takerNow.toFixed(2)} (1보다 크면 시장가 매수 우세).
           이 지표들은 2021~2026 코인 10종 백테스트에서 이후 20일 수익률을 일관되게 예측하지 못해 판정에 쓰지 않습니다.
           시장 분위기 파악과 선물 보유 비용(펀딩비) 확인용입니다.
@@ -3235,10 +3241,10 @@ function AdviceView({adv, ticker, amount, stance, deriv}) {
   const tipIcon  = {danger:'⛔', warn:'⚠️', info:'💡', ok:'✅'};
   const st = STANCE_UI[stance] || STANCE_UI.neutral;
   const Box = ({label, value, color, sub}) => (
-    <div style={{flex:'1 1 150px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
-      <div style={{fontSize:'.74rem',color:'#8794a8',marginBottom:3}}>{label}</div>
+    <div style={{flex:'1 1 150px',background:'#172338',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
+      <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:3}}>{label}</div>
       <div style={{fontSize:'.98rem',fontWeight:800,color:color||'#e2e8f0',fontFamily:'monospace'}}>{value}</div>
-      {sub && <div style={{fontSize:'.74rem',color:'#8794a8',marginTop:2}}>{sub}</div>}
+      {sub && <div style={{fontSize:'.8rem',color:'#8794a8',marginTop:2}}>{sub}</div>}
     </div>
   );
   return (
@@ -3247,7 +3253,7 @@ function AdviceView({adv, ticker, amount, stance, deriv}) {
         background: adv.sev==='danger'?'#450a0a':adv.sev==='warn'?'#451a03':'#052e16',
         border:`1px solid ${adv.sev==='danger'?'#7f1d1d':adv.sev==='warn'?'#92400e':'#166534'}`}}>
         <span style={{fontWeight:900,fontSize:'1rem',color:adv.sev==='danger'?'#f87171':adv.sev==='warn'?'#fbbf24':'#4ade80'}}>{adv.headline}</span>
-        <span style={{fontSize:'.78rem',color:'#94a3b8'}}>판정: <b style={{color:st.color}}>{st.label}</b> · {st.sub}</span>
+        <span style={{fontSize:'.84rem',color:'#94a3b8'}}>판정: <b style={{color:st.color}}>{st.label}</b> · {st.sub}</span>
       </div>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
         <Box label="현재 손익 (가격 기준)" value={sgnPct(adv.movePct)} color={pnlCol(adv.movePct)} sub={adv.lev > 1 ? `증거금 기준 ${sgnPct(adv.marginPct)}` : null}/>
@@ -3263,10 +3269,10 @@ function AdviceView({adv, ticker, amount, stance, deriv}) {
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {adv.tips.map((t, i) => (
-          <div key={i} style={{fontSize:'.83rem',lineHeight:1.6,color:tipColor[t.lv],background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'8px 12px'}}>{tipIcon[t.lv]} {t.text}</div>
+          <div key={i} style={{fontSize:'.83rem',lineHeight:1.6,color:tipColor[t.lv],background:'#172338',border:'1px solid #1e293b',borderRadius:8,padding:'8px 12px'}}>{tipIcon[t.lv]} {t.text}</div>
         ))}
       </div>
-      {adv.futures && <div style={{fontSize:'.74rem',color:'#8794a8',marginTop:8}}>청산가는 격리 마진·유지증거금률 {adv.mmr}% 가정 근사치입니다. 교차 마진은 거래소 화면의 청산가를 우선하세요.</div>}
+      {adv.futures && <div style={{fontSize:'.8rem',color:'#8794a8',marginTop:8}}>청산가는 격리 마진·유지증거금률 {adv.mmr}% 가정 근사치입니다. 교차 마진은 거래소 화면의 청산가를 우선하세요.</div>}
     </div>
   );
 }
@@ -3279,7 +3285,7 @@ function PositionForm({initial, onSave, onCancel}) {
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF(p => ({...p, [k]: v}));
   const seg = on => ({padding:'6px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',fontSize:'.82rem',fontWeight:600,borderRadius:0});
-  const lab = {fontSize:'.76rem',color:'#8794a8',marginBottom:4,display:'block'};
+  const lab = {fontSize:'.82rem',color:'#8794a8',marginBottom:4,display:'block'};
   const fillPrice = async () => {
     if (!f.ticker.trim()) return;
     setBusy(true);
@@ -3295,7 +3301,7 @@ function PositionForm({initial, onSave, onCancel}) {
     onSave({...initial, id: initial?.id || posId(), ticker, type: f.type, side: f.type === 'futures' ? f.side : 'long', lev: f.type === 'futures' ? lev : 1, avg, amount, memo: f.memo, createdAt: initial?.createdAt || Date.now()});
   };
   return (
-    <div style={{background:'#0a0f1a',border:'1px solid #334155',borderRadius:10,padding:14,marginBottom:12}}>
+    <div style={{background:'#172338',border:'1px solid #334155',borderRadius:10,padding:14,marginBottom:12}}>
       <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
         <div style={{flex:'1 1 110px'}}><span style={lab}>코인</span><input value={f.ticker} onChange={e => set('ticker', e.target.value)} placeholder="예: BTC"/></div>
         <div><span style={lab}>거래 유형</span>
@@ -3313,7 +3319,7 @@ function PositionForm({initial, onSave, onCancel}) {
         </>}
         <div style={{flex:'1 1 140px'}}><span style={lab}>평균 단가 ($)</span>
           <div style={{display:'flex',gap:4}}><input type="number" value={f.avg} onChange={e => set('avg', e.target.value)}/>
-            <button className="btn-secondary" style={{padding:'6px 8px',fontSize:'.74rem',whiteSpace:'nowrap'}} onClick={fillPrice} disabled={busy} title="현재가로 채우기">현재가</button></div></div>
+            <button className="btn-secondary" style={{padding:'6px 8px',fontSize:'.8rem',whiteSpace:'nowrap'}} onClick={fillPrice} disabled={busy} title="현재가로 채우기">현재가</button></div></div>
         <div style={{flex:'1 1 140px'}}><span style={lab}>투입 금액 ($){f.type === 'futures' ? ' · 증거금' : ''}</span><input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="예: 2000"/></div>
         <div style={{flex:'2 1 180px'}}><span style={lab}>메모 (선택)</span><input value={f.memo} onChange={e => set('memo', e.target.value)}/></div>
       </div>
@@ -3372,7 +3378,7 @@ function MyPositionsTab({onAnalyze}) {
     <div className="stat-card" style={{textAlign:'left'}}>
       <div className="stat-label" style={{marginTop:0,marginBottom:4}}>{label}</div>
       {children || <div className="stat-value" style={{fontSize:'1.25rem',color:color||'#e2e8f0'}}>{value}</div>}
-      {sub && <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:4}}>{sub}</div>}
+      {sub && <div style={{fontSize:'.82rem',color:'#8794a8',marginTop:4}}>{sub}</div>}
     </div>
   );
   const save = pos => { update(a => ({...a, positions: a.positions.some(x => x.id === pos.id) ? a.positions.map(x => x.id === pos.id ? pos : x) : [...a.positions, pos]})); setEditing(null); setOpen(pos.id); };
@@ -3391,7 +3397,7 @@ function MyPositionsTab({onAnalyze}) {
             {cashEdit
               ? <input type="number" autoFocus defaultValue={acc.cash || ''} onBlur={e => { update(a => ({...a, cash: Math.max(0, parseFloat(e.target.value) || 0)})); setCashEdit(false); }}
                        onKeyDown={e => e.key === 'Enter' && e.target.blur()} style={{padding:'4px 8px'}}/>
-              : <div className="stat-value" style={{fontSize:'1.25rem',cursor:'pointer'}} onClick={() => setCashEdit(true)} title="눌러서 수정">{fmtUsd(+acc.cash || 0)} <span style={{fontSize:'.7rem',color:'#8794a8'}}>✏️</span></div>}
+              : <div className="stat-value" style={{fontSize:'1.25rem',cursor:'pointer'}} onClick={() => setCashEdit(true)} title="눌러서 수정">{fmtUsd(+acc.cash || 0)} <span style={{fontSize:'.8rem',color:'#8794a8'}}>✏️</span></div>}
           </Tile>
           <Tile label="미실현 손익" value={fmtUsd(T.pnl)} color={pnlCol(T.pnl)} sub={T.invested ? sgnPct(T.pnl / T.invested * 100) + ' (투자금 대비)' : null}/>
           <Tile label="총 노출" value={`${exposure.toFixed(0)}%`} color={exposure > 100 ? '#fbbf24' : '#e2e8f0'} sub="포지션 명목가 합 ÷ 총자산"/>
@@ -3420,15 +3426,15 @@ function MyPositionsTab({onAnalyze}) {
             <div key={p.id} style={{border:'1px solid #1e293b',borderRadius:10,marginBottom:8,overflow:'hidden',background: isOpen ? '#0f172a' : 'transparent'}}>
               <div className="pos-row" onClick={() => setOpen(isOpen ? null : p.id)}>
                 <div>
-                  <div style={{fontWeight:800,fontSize:'1rem'}}>{p.ticker} <span className={`badge ${p.type === 'futures' ? (p.side === 'short' ? 'badge-red' : 'badge-green') : 'badge-gray'}`} style={{fontSize:'.7rem'}}>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</span></div>
-                  <div style={{fontSize:'.74rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {fmtUsd(p.amount)}</div>
+                  <div style={{fontWeight:800,fontSize:'1rem'}}>{p.ticker} <span className={`badge ${p.type === 'futures' ? (p.side === 'short' ? 'badge-red' : 'badge-green') : 'badge-gray'}`} style={{fontSize:'.8rem'}}>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</span></div>
+                  <div style={{fontSize:'.8rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {fmtUsd(p.amount)}</div>
                 </div>
-                <div><div style={{fontSize:'.74rem',color:'#8794a8'}}>현재가</div><div style={{fontFamily:'monospace',fontWeight:700}}>{v ? fmtPx(priceOf(p.ticker), p.ticker) : (a?.error ? '조회 실패' : '…')}</div></div>
-                <div><div style={{fontSize:'.74rem',color:'#8794a8'}}>손익</div><div style={{fontWeight:800,color: v ? pnlCol(v.pnlPct) : '#8794a8'}}>{v ? sgnPct(v.pnlPct) : '—'}</div><div style={{fontSize:'.74rem',color: v ? pnlCol(v.pnl) : '#8794a8'}}>{v ? fmtUsd(v.pnl) : ''}</div></div>
-                <div><div style={{fontSize:'.74rem',color:'#8794a8'}}>투입 비중</div><div style={{fontWeight:700}}>{T.total > 0 && p.amount ? `${(p.amount / T.total * 100).toFixed(1)}%` : '—'}</div></div>
+                <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>현재가</div><div style={{fontFamily:'monospace',fontWeight:700}}>{v ? fmtPx(priceOf(p.ticker), p.ticker) : (a?.error ? '조회 실패' : '…')}</div></div>
+                <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>손익</div><div style={{fontWeight:800,color: v ? pnlCol(v.pnlPct) : '#8794a8'}}>{v ? sgnPct(v.pnlPct) : '—'}</div><div style={{fontSize:'.8rem',color: v ? pnlCol(v.pnl) : '#8794a8'}}>{v ? fmtUsd(v.pnl) : ''}</div></div>
+                <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>투입 비중</div><div style={{fontWeight:700}}>{T.total > 0 && p.amount ? `${(p.amount / T.total * 100).toFixed(1)}%` : '—'}</div></div>
                 <div className="pos-verdict">
                   {st ? <div style={{fontWeight:800,color:st.color,fontSize:'.86rem'}}>{st.icon} {st.label} <span style={{fontWeight:500,color:'#8794a8'}}>{st.sub}</span></div> : <div style={{color:'#8794a8',fontSize:'.8rem'}}>{a?.error ? '판정 실패' : '판정 계산 중'}</div>}
-                  {adv && <div style={{fontSize:'.78rem',fontWeight:700,color: adv.sev === 'danger' ? '#f87171' : adv.sev === 'warn' ? '#fbbf24' : '#4ade80'}}>{adv.headline}</div>}
+                  {adv && <div style={{fontSize:'.84rem',fontWeight:700,color: adv.sev === 'danger' ? '#f87171' : adv.sev === 'warn' ? '#fbbf24' : '#4ade80'}}>{adv.headline}</div>}
                 </div>
               </div>
               {isOpen && (
@@ -3454,7 +3460,7 @@ function MyPositionsTab({onAnalyze}) {
           );
         })}
       </div>
-      <div style={{fontSize:'.76rem',color:'#8794a8',lineHeight:1.6,padding:'0 4px 16px'}}>
+      <div style={{fontSize:'.82rem',color:'#8794a8',lineHeight:1.6,padding:'0 4px 16px'}}>
         포지션 정보는 이 브라우저에만 저장됩니다. 판정과 손절선은 일봉 기준이며, 손절선은 검증된 규칙(최고 종가 − 3 ATR)을 현재가에 적용한 값입니다. 투자 권유가 아닙니다.
       </div>
     </div>
@@ -3480,8 +3486,8 @@ function TickerPositions({report, onOpenPositions}) {
       <div className="card-title" style={{justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
         <span>🧭 내 {ticker} 포지션</span>
         <span style={{display:'flex',gap:6}}>
-          {!adding && <button className="btn-secondary" style={{padding:'5px 12px',fontSize:'.78rem'}} onClick={() => setAdding(true)}>+ 추가</button>}
-          <button className="btn-secondary" style={{padding:'5px 12px',fontSize:'.78rem'}} onClick={onOpenPositions}>💼 내 포지션 탭</button>
+          {!adding && <button className="btn-secondary" style={{padding:'5px 12px',fontSize:'.84rem'}} onClick={() => setAdding(true)}>+ 추가</button>}
+          <button className="btn-secondary" style={{padding:'5px 12px',fontSize:'.84rem'}} onClick={onOpenPositions}>💼 내 포지션 탭</button>
         </span>
       </div>
       {adding && <PositionForm initial={{ticker, avg: report.price}} onSave={pos => { update(a => ({...a, positions: [...a.positions, pos]})); setAdding(false); }} onCancel={() => setAdding(false)}/>}
@@ -3522,18 +3528,18 @@ function ConclusionSection({report}) {
       </div>
       {open && <>
       {report.summary && (
-        <div style={{background:'#0a0f1a',borderLeft:'3px solid #3b82f6',borderRadius:'0 8px 8px 0',padding:'14px 16px',marginBottom:16,lineHeight:1.8,fontSize:'.9rem',color:'#cbd5e1'}}>
+        <div style={{background:'#172338',borderLeft:'3px solid #3b82f6',borderRadius:'0 8px 8px 0',padding:'14px 16px',marginBottom:16,lineHeight:1.8,fontSize:'.9rem',color:'#cbd5e1'}}>
           {report.summary}
         </div>
       )}
-      <div style={{background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
-        <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.78rem',fontWeight:700,color:'#8794a8',letterSpacing:'0.08em'}}>투자 의견</div>
+      <div style={{background:'#172338',border:'1px solid #1e293b',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+        <div style={{padding:'12px 14px',borderBottom:'1px solid #1e293b',fontSize:'.95rem',fontWeight:700,color:'#e2e8f0',letterSpacing:'-0.01em'}}>투자 의견</div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:0}}>
           <div style={{padding:'14px',borderRight:'1px solid #1e293b'}}>
             <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
               <div style={{fontSize:'1.4rem',lineHeight:1}}>🎯</div>
               <div>
-                <div style={{fontSize:'.76rem',fontWeight:700,color:'#a78bfa',letterSpacing:'0.08em',marginBottom:6}}>종합 의견</div>
+                <div style={{fontSize:'.82rem',fontWeight:700,color:'#a78bfa',letterSpacing:'0.08em',marginBottom:6}}>종합 의견</div>
                 <div style={{fontSize:'.83rem',color:'#94a3b8',lineHeight:1.7}}>
                   {report.recommendation || report.summary || '분석 데이터 없음'}
                 </div>
@@ -3762,7 +3768,7 @@ function InteractiveChart({query, mode, resolvedTicker, initialTf, analysisTf, o
                 onClick={()=>!disabled && setTf(t.id)}
                 title={disabled ? '한국 주식은 일봉/주봉/월봉만 지원' : ''}
                 style={{
-                  padding:'3px 10px',borderRadius:5,fontSize:'.78rem',fontWeight:600,
+                  padding:'3px 10px',borderRadius:5,fontSize:'.84rem',fontWeight:600,
                   border:'none',transition:'all .15s',
                   cursor: disabled ? 'not-allowed' : 'pointer',
                   opacity: disabled ? 0.3 : 1,
@@ -3771,13 +3777,13 @@ function InteractiveChart({query, mode, resolvedTicker, initialTf, analysisTf, o
                 }}>{t.label}</button>
             );
           })}
-          {isKrStock && <span style={{fontSize:'.76rem',color:'#8794a8',marginLeft:4}}>일/주/월봉만 지원</span>}
+          {isKrStock && <span style={{fontSize:'.82rem',color:'#8794a8',marginLeft:4}}>일/주/월봉만 지원</span>}
         </div>
       </div>
       {onAnalyzeTf && analysisTf && tf!==analysisTf && !loading && !error && (
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',margin:'0 0 8px',padding:'8px 12px',background:'#0f172a',border:'1px solid #1e293b',borderRadius:8,fontSize:'.8rem',color:'#94a3b8'}}>
           <span>지금 분석(지표·점수·AI)은 <b style={{color:'#e2e8f0'}}>{(TIMEFRAMES.find(t=>t.id===analysisTf)||{}).label}</b> 기준입니다.</span>
-          <button className="btn-secondary" style={{padding:'3px 12px',fontSize:'.78rem'}} onClick={()=>onAnalyzeTf(tf)}>
+          <button className="btn-secondary" style={{padding:'3px 12px',fontSize:'.84rem'}} onClick={()=>onAnalyzeTf(tf)}>
             📌 {(TIMEFRAMES.find(t=>t.id===tf)||{}).label} 기준으로 다시 분석
           </button>
         </div>
@@ -3790,7 +3796,7 @@ function InteractiveChart({query, mode, resolvedTicker, initialTf, analysisTf, o
       )}
       {error && <div className="alert-box alert-err" style={{fontSize:'.82rem'}}>{error}</div>}
       {!loading && !error && ohlcv && (
-        <div style={{fontSize:'.76rem',color:'#8794a8',marginBottom:4,textAlign:'right'}}>
+        <div style={{fontSize:'.82rem',color:'#8794a8',marginBottom:4,textAlign:'right'}}>
           {ohlcv.length}개 캔들 · {ohlcv[0]?.date?.slice(0,10)} ~ {ohlcv[ohlcv.length-1]?.date?.slice(0,10)}
         </div>
       )}
@@ -3825,7 +3831,7 @@ function ModeSelector({mode, onChange}) {
           {m.label}
         </button>
       ))}
-      <span style={{fontSize:'.75rem',color:'#8794a8',alignSelf:'center',marginLeft:4}}>
+      <span style={{fontSize:'.82rem',color:'#8794a8',alignSelf:'center',marginLeft:4}}>
         {mode==='stock'?'Yahoo Finance 검색':mode==='crypto'?'CoinGecko 검색':'자동 감지'}
       </span>
     </div>
@@ -4082,7 +4088,7 @@ function AnalysisTab({apiKey, settings, serverHasKey, jump, onJumpDone, onOpenPo
           {!aiLoading && report && <ConclusionSection report={report}/>}
           </div>
 
-          <div style={{fontSize:'.74rem',color:'#8794a8',lineHeight:1.6,padding:'4px 6px 12px'}}>
+          <div style={{fontSize:'.8rem',color:'#8794a8',lineHeight:1.6,padding:'4px 6px 12px'}}>
             ⚠️ 본 분석은 과거 가격 데이터의 지표 계산과 AI 해설에 기반한 참고용 정보이며 투자 권유가 아닙니다. 매매 판단과 손익의 책임은 투자자 본인에게 있습니다.
           </div>
         </>
@@ -4092,7 +4098,7 @@ function AnalysisTab({apiKey, settings, serverHasKey, jump, onJumpDone, onOpenPo
         <div className="card">
           <div className="card-title" style={{justifyContent:'space-between'}}>
             <span>📁 분석 기록 ({logs.length})</span>
-            <button className="btn-danger" style={{padding:'4px 10px',fontSize:'.75rem'}} onClick={()=>{ls_set('cs_logs',[]);setLogs([]);}}>초기화</button>
+            <button className="btn-danger" style={{padding:'4px 10px',fontSize:'.82rem'}} onClick={()=>{ls_set('cs_logs',[]);setLogs([]);}}>초기화</button>
           </div>
           <div style={{maxHeight:300,overflowY:'auto'}}>
             <table>
@@ -4100,7 +4106,7 @@ function AnalysisTab({apiKey, settings, serverHasKey, jump, onJumpDone, onOpenPo
               <tbody>
                 {[...logs].reverse().slice(0,50).map((l,i)=>(
                   <tr key={i}>
-                    <td style={{fontSize:'.75rem',color:'#8794a8'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
+                    <td style={{fontSize:'.82rem',color:'#8794a8'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
                     <td style={{fontWeight:700}}>{l.ticker}</td>
                     <td><span className={`badge ${l.position==='long'?'badge-green':l.position==='short'?'badge-red':'badge-yellow'}`}>{l.position}</span></td>
                     <td>{l.confidence!=null ? `${l.confidence}%` : '—'}</td>
@@ -4271,7 +4277,7 @@ function PerformanceTab() {
     <div className="stat-card" style={{textAlign:'left'}}>
       <div className="stat-label" style={{marginTop:0,marginBottom:4}}>{label}</div>
       <div className="stat-value" style={{fontSize:'1.35rem',color:color||'#e2e8f0'}}>{value}</div>
-      {sub && <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:4}}>{sub}</div>}
+      {sub && <div style={{fontSize:'.82rem',color:'#8794a8',marginTop:4}}>{sub}</div>}
     </div>
   );
   const stanceOrder = ['long','neutral','bear','avoid'];
@@ -4334,7 +4340,7 @@ function PerformanceTab() {
                   </tbody>
                 </table>
               </div>
-              <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:6}}>
+              <div style={{fontSize:'.82rem',color:'#8794a8',marginTop:6}}>
                 롱 판정의 평균·상승 비율이 다른 판정보다 꾸준히 높아야 판정이 쓸모 있다는 뜻입니다.
                 참고: 백테스트(코인 일봉 2023~2026) 전체 기준선은 20일 후 상승 {EMPIRICAL_CRYPTO_1D.all.up}%.
               </div>
@@ -4352,10 +4358,10 @@ function PerformanceTab() {
                   const g = l.grade;
                   return (
                     <tr key={i}>
-                      <td style={{fontSize:'.76rem',color:'#8794a8',whiteSpace:'nowrap'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
-                      <td style={{fontWeight:700,whiteSpace:'nowrap'}}>{l.ticker} <span style={{color:'#8794a8',fontWeight:500,fontSize:'.76rem'}}>{tf}</span></td>
-                      <td style={{whiteSpace:'nowrap'}}><span style={{color:st.color,fontWeight:700}}>{st.label}</span>{l.score != null && <span style={{color:'#8794a8',fontSize:'.76rem'}}> {l.score>0?'+':''}{l.score}</span>}</td>
-                      <td style={{fontSize:'.78rem',fontFamily:'monospace',whiteSpace:'nowrap'}}>
+                      <td style={{fontSize:'.82rem',color:'#8794a8',whiteSpace:'nowrap'}}>{l.date?.slice(0,16).replace('T',' ')}</td>
+                      <td style={{fontWeight:700,whiteSpace:'nowrap'}}>{l.ticker} <span style={{color:'#8794a8',fontWeight:500,fontSize:'.82rem'}}>{tf}</span></td>
+                      <td style={{whiteSpace:'nowrap'}}><span style={{color:st.color,fontWeight:700}}>{st.label}</span>{l.score != null && <span style={{color:'#8794a8',fontSize:'.82rem'}}> {l.score>0?'+':''}{l.score}</span>}</td>
+                      <td style={{fontSize:'.84rem',fontFamily:'monospace',whiteSpace:'nowrap'}}>
                         {l.entry > 0 ? <>{fmtPx(l.entry,l.ticker)} / <span style={{color:'#fb923c'}}>{fmtPx(l.stop,l.ticker)}</span>{l.tp1 ? <> / <span style={{color:'#a78bfa'}}>{fmtPx(l.tp1,l.ticker)}</span> <span style={{color:'#8794a8'}}>(옛 플랜)</span></> : null}</> : '—'}
                       </td>
                       <td style={{fontSize:'.8rem'}}>{tradeCell(l)}</td>
@@ -4482,7 +4488,7 @@ function BacktestTab() {
     <div className="stat-card" style={{textAlign:'left'}}>
       <div className="stat-label" style={{marginTop:0, marginBottom:4}}>{label}</div>
       <div className="stat-value" style={{fontSize:'1.3rem', color: color || '#e2e8f0'}}>{value}</div>
-      {sub && <div style={{fontSize:'.76rem', color:'#8794a8', marginTop:4}}>{sub}</div>}
+      {sub && <div style={{fontSize:'.82rem', color:'#8794a8', marginTop:4}}>{sub}</div>}
     </div>
   );
   const FwdTable = ({rows, labelOf}) => (
@@ -4538,7 +4544,7 @@ function BacktestTab() {
       {res && <>
         <div className="card">
           <div className="card-title" style={{marginBottom:8}}>📋 {res.sym} · {res.tfLabel} · {new Date(res.from).toISOString().slice(0,10)} ~ {new Date(res.to).toISOString().slice(0,10)}</div>
-          <div style={{fontSize:'.78rem', color:'#8794a8', marginBottom:12}}>
+          <div style={{fontSize:'.84rem', color:'#8794a8', marginBottom:12}}>
             {res.total}봉({res.source}) · 매 봉 판정 · 판정 창 {res.W}봉 · BTC 필터 {res.filter ? '적용' : '미적용'} · 규칙: 롱 판정 → 다음 봉 시가 진입, 3 ATR 추적 손절, 익절 없음
           </div>
           {res.equity && (() => { const E = res.equity, S = E.strat, H = E.hold, pc = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
@@ -4572,7 +4578,7 @@ function BacktestTab() {
           <FwdTable rows={res.buckets} labelOf={r => `점수 ${r.label}`}/>
         </div>
 
-        <div style={{fontSize:'.76rem', color:'#8794a8', lineHeight:1.7, padding:'0 4px 16px'}}>
+        <div style={{fontSize:'.82rem', color:'#8794a8', lineHeight:1.7, padding:'0 4px 16px'}}>
           ⚠️ 해석 주의: 인접 표본은 보유 기간이 겹쳐 독립이 아니므로 t값은 {GRADE_RULES.fwdBars}봉 이상 떨어진 표본만으로 계산했습니다.
           수수료는 {res.fee ? `왕복 ${(res.fee*100).toFixed(1)}%` : '0%'}를 차감했습니다. R은 손절폭 기준이라 손절폭이 좁은 짧은 봉일수록 같은 수수료가 R로 커집니다
           (이 백테스트: 손절폭 중앙값 {v.medRiskPct ? (v.medRiskPct*100).toFixed(2) + '%' : '—'}, 거래당 수수료 약 {v.avgFeeR != null ? v.avgFeeR.toFixed(2) : '—'}R). 슬리피지는 제외했습니다.
@@ -4692,7 +4698,7 @@ function MonitorTab({apiKey, settings, serverHasKey}) {
                 {prices[t] && <span style={{color:'#e2e8f0'}}>${prices[t].toLocaleString(undefined,{maximumFractionDigits:4})}</span>}
                 {!prices[t] && <span style={{color:'#8794a8',fontSize:'.8rem'}}>가격 대기중...</span>}
               </div>
-              <button className="btn-danger" style={{padding:'2px 8px',fontSize:'.75rem'}} onClick={()=>removeTicker(t)}>삭제</button>
+              <button className="btn-danger" style={{padding:'2px 8px',fontSize:'.82rem'}} onClick={()=>removeTicker(t)}>삭제</button>
             </div>
           ))
         )}
@@ -4702,7 +4708,7 @@ function MonitorTab({apiKey, settings, serverHasKey}) {
         <div className="card">
           <div className="card-title" style={{justifyContent:'space-between'}}>
             <span>🔔 알림 기록</span>
-            <button className="btn-secondary" style={{padding:'4px 10px',fontSize:'.75rem'}} onClick={()=>setAlerts([])}>초기화</button>
+            <button className="btn-secondary" style={{padding:'4px 10px',fontSize:'.82rem'}} onClick={()=>setAlerts([])}>초기화</button>
           </div>
           {alerts.map((a,i)=>(
             <div key={i} className={`alert-box ${a.change>0?'alert-ok':'alert-err'}`} style={{marginBottom:6}}>
@@ -4731,7 +4737,7 @@ function SettingsDrawer({settings, onSave, onClose, serverHasKey}) {
         <div className="settings-group">
           <label>Google AI API 키</label>
           <input type="password" value={s.apiKey} onChange={e=>set('apiKey',e.target.value)} placeholder="AIza..."/>
-          <p style={{fontSize:'.75rem',color:'#8794a8',marginTop:4}}>
+          <p style={{fontSize:'.82rem',color:'#8794a8',marginTop:4}}>
             <a href="https://aistudio.google.com/apikey" target="_blank" style={{color:'#60a5fa'}}>aistudio.google.com/apikey</a> 에서 무료 발급
           </p>
         </div>
@@ -4842,13 +4848,13 @@ function App() {
   ];
 
   const statusBadge = PROXY_URL ? (
-    <span className="badge badge-green" style={{fontSize:'.75rem'}}>✅ 서비스 준비됨</span>
+    <span className="badge badge-green" style={{fontSize:'.82rem'}}>✅ 서비스 준비됨</span>
   ) : DEPLOY_KEY ? (
-    <span className="badge badge-green" style={{fontSize:'.75rem'}}>✅ AI 준비됨</span>
+    <span className="badge badge-green" style={{fontSize:'.82rem'}}>✅ AI 준비됨</span>
   ) : activeKey ? (
-    <span className="badge badge-green" style={{fontSize:'.75rem'}}>🔑 Google AI 연결됨</span>
+    <span className="badge badge-green" style={{fontSize:'.82rem'}}>🔑 Google AI 연결됨</span>
   ) : (
-    <span className="badge badge-red" style={{fontSize:'.75rem',cursor:'pointer'}} onClick={()=>setShowApiModal(true)}>API 키 없음 (클릭)</span>
+    <span className="badge badge-red" style={{fontSize:'.82rem',cursor:'pointer'}} onClick={()=>setShowApiModal(true)}>API 키 없음 (클릭)</span>
   );
 
   return (
