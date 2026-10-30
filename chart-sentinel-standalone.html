@@ -3289,8 +3289,10 @@ function PositionForm({initial, onSave, onCancel}) {
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF(p => ({...p, [k]: v}));
-  const seg = on => ({padding:'6px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',fontSize:'.82rem',fontWeight:600,borderRadius:0});
-  const lab = {fontSize:'.82rem',color:'#8794a8',marginBottom:4,display:'block'};
+  const H = 40;  // 입력·버튼 공통 높이
+  const seg = on => ({height:H,padding:'0 14px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',fontSize:'.82rem',fontWeight:600,borderRadius:0});
+  const lab = {fontSize:'.82rem',color:'#8794a8',marginBottom:4,height:26,display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'};
+  const inp = {height:H};
   const fillPrice = async () => {
     if (!f.ticker.trim()) return;
     setBusy(true);
@@ -3308,8 +3310,8 @@ function PositionForm({initial, onSave, onCancel}) {
   };
   return (
     <div style={{background:'#172338',border:'1px solid #334155',borderRadius:10,padding:14,marginBottom:12}}>
-      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
-        <div style={{flex:'1 1 110px'}}><span style={lab}>코인</span><input value={f.ticker} onChange={e => set('ticker', e.target.value)} placeholder="예: BTC"/></div>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-start'}}>
+        <div style={{flex:'1 1 110px'}}><span style={lab}>코인</span><input value={f.ticker} onChange={e => set('ticker', e.target.value)} placeholder="예: BTC" style={inp}/></div>
         <div><span style={lab}>거래 유형</span>
           <div style={{display:'flex',borderRadius:6,overflow:'hidden'}}>
             <button style={seg(f.type==='spot')} onClick={() => set('type','spot')}>현물</button>
@@ -3321,29 +3323,29 @@ function PositionForm({initial, onSave, onCancel}) {
               <button style={seg(f.side==='long')} onClick={() => set('side','long')}>롱</button>
               <button style={seg(f.side==='short')} onClick={() => set('side','short')}>숏</button>
             </div></div>
-          <div style={{width:90}}><span style={lab}>레버리지(배)</span><input type="number" min="1" max="125" value={f.lev} onChange={e => set('lev', e.target.value)}/></div>
+          <div style={{width:90}}><span style={lab}>레버리지(배)</span><input type="number" min="1" max="125" value={f.lev} onChange={e => set('lev', e.target.value)} style={inp}/></div>
         </>}
         <div style={{flex:'1 1 140px'}}><span style={lab}>평균 단가 ($)</span>
-          <div style={{display:'flex',gap:4}}><input type="number" value={f.avg} onChange={e => set('avg', e.target.value)}/>
-            <button className="btn-secondary" style={{padding:'6px 8px',fontSize:'.8rem',whiteSpace:'nowrap'}} onClick={fillPrice} disabled={busy} title="현재가로 채우기">현재가</button></div></div>
+          <div style={{display:'flex',gap:4}}><input type="number" value={f.avg} onChange={e => set('avg', e.target.value)} style={inp}/>
+            <button className="btn-secondary" style={{height:H,padding:'0 10px',fontSize:'.8rem',whiteSpace:'nowrap'}} onClick={fillPrice} disabled={busy} title="현재가로 채우기">현재가</button></div></div>
         <div style={{flex:'1 1 180px'}}>
-          <span style={{...lab,display:'flex',alignItems:'center',gap:6}}>
+          <span style={lab}>
             <span style={{display:'inline-flex',borderRadius:5,overflow:'hidden'}}>
-              <button style={{...seg(f.mode==='amount'),padding:'2px 8px',fontSize:'.78rem'}} onClick={() => set('mode','amount')}>금액</button>
-              <button style={{...seg(f.mode==='qty'),padding:'2px 8px',fontSize:'.78rem'}} onClick={() => set('mode','qty')}>수량</button>
+              <button style={{...seg(f.mode==='amount'),height:22,padding:'0 8px',fontSize:'.78rem'}} onClick={() => set('mode','amount')}>금액</button>
+              <button style={{...seg(f.mode==='qty'),height:22,padding:'0 8px',fontSize:'.78rem'}} onClick={() => set('mode','qty')}>수량</button>
             </span>
             {f.mode === 'qty' ? `수량 (${(f.ticker || '코인').toUpperCase()} 개수)` : `투입 금액 ($)${f.type === 'futures' ? ' · 증거금' : ''}`}
           </span>
           {f.mode === 'qty'
-            ? <input type="number" value={f.qty} onChange={e => set('qty', e.target.value)} placeholder="예: 0.05"/>
-            : <input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="예: 2000"/>}
+            ? <input type="number" value={f.qty} onChange={e => set('qty', e.target.value)} placeholder="예: 0.05" style={inp}/>
+            : <input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="예: 2000" style={inp}/>}
           <div style={{fontSize:'.8rem',color:'#94a3b8',marginTop:4,minHeight:'1.2em'}}>
             {f.mode === 'qty'
               ? (amountFromQty(parseFloat(f.qty)) ? `= 투입 ${fmtUsd(amountFromQty(parseFloat(f.qty)))}${f.type === 'futures' ? ` (증거금, 명목 ${fmtUsd(parseFloat(f.qty) * avgN)})` : ''}` : '평균 단가를 넣으면 투입 금액으로 환산됩니다')
               : (qtyFromAmount(parseFloat(f.amount)) ? `= ${+qtyFromAmount(parseFloat(f.amount)).toPrecision(6)} ${(f.ticker || '').toUpperCase()}${f.type === 'futures' ? ` (명목 ${fmtUsd(parseFloat(f.amount) * levN)})` : ''}` : '')}
           </div>
         </div>
-        <div style={{flex:'2 1 180px'}}><span style={lab}>메모 (선택)</span><input value={f.memo} onChange={e => set('memo', e.target.value)}/></div>
+        <div style={{flex:'2 1 180px'}}><span style={lab}>메모 (선택)</span><input value={f.memo} onChange={e => set('memo', e.target.value)} style={inp}/></div>
       </div>
       {err && <div style={{color:'#f87171',fontSize:'.8rem',marginTop:8}}>{err}</div>}
       <div style={{display:'flex',gap:8,marginTop:10}}>
