@@ -63,6 +63,8 @@ button{cursor:pointer;border:none;border-radius:8px;padding:10px 20px;font-size:
 .fib-row span:nth-child(2){text-align:right;font-variant-numeric:tabular-nums}
 .fib-row span:nth-child(3){text-align:right}
 .mob-only{display:none}
+.pos-row{display:grid;grid-template-columns:minmax(120px,1.3fr) minmax(100px,1fr) minmax(100px,1fr) minmax(80px,.8fr) minmax(150px,1.4fr);gap:10px;align-items:center;padding:12px 14px;cursor:pointer}
+.pos-verdict{text-align:right}
 details>summary{list-style:none}
 details>summary::-webkit-details-marker{display:none}
 details>summary::before{content:'▸ ';color:#8794a8}
@@ -76,6 +78,8 @@ details[open]>summary::before{content:'▾ '}
   .price-tags{grid-template-columns:repeat(2,minmax(0,1fr))}
   .fib-grid{grid-template-columns:1fr}
   .plan-table .col-sub{display:none}
+  .pos-row{grid-template-columns:1fr 1fr;gap:8px 12px}
+  .pos-verdict{grid-column:1 / -1;text-align:left}
   .plan-table .mob-only{display:block;font-size:.72rem;color:#94a3b8;font-weight:500;margin-top:2px;white-space:normal}
   .plan-table td:first-child{white-space:normal !important}
   .plan-table td:nth-child(2){font-size:.84rem !important}
@@ -3147,126 +3151,355 @@ function TrackRecordCard({report}) {
   );
 }
 
-// ─── 내 포지션 전략 카드 ──────────────────────────────────────────────────────
-const POSITIONS_KEY = 'cs_positions';
-function PositionAdvisor({report}) {
-  const ticker = (report?.ticker || '').toUpperCase();
-  const isCrypto = report?.market === 'crypto';
-  const [open, setOpen] = React.useState(true);
-  const [f, setF] = React.useState(() => {
-    const saved = (ls_get(POSITIONS_KEY, {}) || {})[ticker];
-    if (saved) return saved;
-    const pf = (loadPortfolio() || []).find(p => (p.ticker||'').toUpperCase() === ticker);
-    return {futures:false, side:'long', lev:'3', avg: pf ? String(pf.avgCost) : '', weight:'', total:''};
+// ─── 내 포지션: 계좌·포지션 저장소 ───────────────────────────────────────────
+// cs_account = {cash, positions:[{id, ticker, type:'spot'|'futures', side, lev, avg, amount, memo, createdAt}], prices:{T:{price,t}}}
+// amount = 투입 금액(USD). 선물은 증거금. 비중은 amount ÷ 총자산으로 자동 계산한다.
+const ACCOUNT_KEY = 'cs_account';
+const posId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+function migrateAccount() {
+  const acc = {cash: 0, positions: [], prices: {}, migrated: true};
+  let total = 0;
+  // 분석 탭에 입력해 두던 값 (코인별 평단·비중·총자산)
+  Object.entries(ls_get('cs_positions', {}) || {}).forEach(([t, f]) => {
+    const avg = parseFloat(f.avg), w = parseFloat(f.weight), tot = parseFloat(f.total) || 0;
+    if (!(avg > 0) || !(w > 0)) return;
+    total = Math.max(total, tot);
+    acc.positions.push({id: posId(), ticker: t.toUpperCase(), type: f.futures ? 'futures' : 'spot', side: f.futures ? (f.side || 'long') : 'long',
+      lev: f.futures ? (parseFloat(f.lev) || 1) : 1, avg, amount: tot > 0 ? tot * w / 100 : null, memo: tot > 0 ? '' : `이전 비중 ${w}% — 투입 금액을 입력하세요`, createdAt: Date.now()});
   });
-  React.useEffect(() => {
-    if (!ticker) return;
-    const all = ls_get(POSITIONS_KEY, {}) || {};
-    all[ticker] = f; ls_set(POSITIONS_KEY, all);
-  }, [f, ticker]);
-  const deriv = useDerivatives(ticker, isCrypto && f.futures);
-  if (!report?.computed) return null;
-  const c = report.computed;
-  const set = (k, v) => setF(prev => ({...prev, [k]: v}));
-  const futures = isCrypto && f.futures;
-  const adv = buildPositionAdvice(
-    {avg: parseFloat(f.avg), weightPct: parseFloat(f.weight), lev: parseFloat(f.lev), futures, side: f.side, funding: deriv.data?.available ? deriv.data.funding : null, fundingIntervalH: deriv.data?.fundingIntervalH || 8},
-    {price: report.price, atr: c.atr, levels: c.levels, stance: stanceOf(report), plan: c.tradePlan});
-  const total = parseFloat(f.total) > 0 ? parseFloat(f.total) : null;
-  const money = pct => total ? ` (${Math.round(total*pct/100).toLocaleString()})` : '';
-  const sgn = v => { const x = Math.abs(v) < 0.005 ? 0 : v; return `${x>=0?'+':''}${x.toFixed(2)}%`; };
-  const col = v => Math.abs(v) < 0.005 ? '#94a3b8' : v>=0 ? '#4ade80' : '#f87171';
+  // 예전 포트폴리오 탭 (수량·평단)
+  (ls_get('cs_portfolio', []) || []).forEach(p => {
+    if (p.avgCost > 0 && p.shares > 0 && !acc.positions.some(x => x.ticker === (p.ticker||'').toUpperCase()))
+      acc.positions.push({id: posId(), ticker: (p.ticker||'').toUpperCase(), type: 'spot', side: 'long', lev: 1, avg: p.avgCost, amount: p.avgCost * p.shares, memo: '', createdAt: Date.now()});
+  });
+  if (total > 0) acc.cash = Math.max(0, total - acc.positions.reduce((s, p) => s + (p.amount || 0), 0));
+  return acc;
+}
+function loadAccount() {
+  const a = ls_get(ACCOUNT_KEY, null);
+  if (a && Array.isArray(a.positions)) return {cash: 0, prices: {}, ...a};
+  const m = migrateAccount(); ls_set(ACCOUNT_KEY, m); return m;
+}
+function useAccount() {
+  const [acc, setAcc] = React.useState(loadAccount);
+  React.useEffect(() => { const h = () => setAcc(loadAccount()); window.addEventListener('cs-account', h); return () => window.removeEventListener('cs-account', h); }, []);
+  const update = fn => { const next = fn(loadAccount()); ls_set(ACCOUNT_KEY, next); setAcc(next); window.dispatchEvent(new Event('cs-account')); };
+  return [acc, update];
+}
+
+// 현재가로 포지션 평가
+function valuePosition(p, price) {
+  if (!(p.avg > 0) || !(p.amount > 0) || !(price > 0)) return null;
+  const lev = p.type === 'futures' ? Math.max(1, +p.lev || 1) : 1;
+  const side = p.type === 'futures' && p.side === 'short' ? -1 : 1;
+  const qty = p.amount * lev / p.avg;
+  const pnl = side * qty * (price - p.avg);
+  return {lev, side, qty, pnl, pnlPct: pnl / p.amount * 100, equity: p.type === 'futures' ? Math.max(0, p.amount + pnl) : qty * price, notional: qty * price};
+}
+function accountTotals(acc, priceOf) {
+  const rows = acc.positions.map(p => ({p, v: valuePosition(p, priceOf(p.ticker))}));
+  const posEquity = rows.reduce((s, r) => s + (r.v ? r.v.equity : (r.p.amount || 0)), 0);
+  const total = (+acc.cash || 0) + posEquity;
+  return {rows, total, posEquity, invested: acc.positions.reduce((s, p) => s + (p.amount || 0), 0),
+          pnl: rows.reduce((s, r) => s + (r.v ? r.v.pnl : 0), 0), notional: rows.reduce((s, r) => s + (r.v ? r.v.notional : 0), 0)};
+}
+// 포지션 + 판정(p1) + 펀딩 → 전략 (buildPositionAdvice 재사용)
+function adviceFor(p, p1, total, deriv) {
+  if (!p1?.computed || !(total > 0)) return null;
+  const c = p1.computed;
+  return buildPositionAdvice(
+    {avg: p.avg, weightPct: (p.amount || 0) / total * 100, lev: p.lev, futures: p.type === 'futures', side: p.side,
+     funding: deriv?.available ? deriv.funding : null, fundingIntervalH: deriv?.fundingIntervalH || 8},
+    {price: p1.price, atr: c.atr, levels: c.levels, stance: c.verdict.stance, plan: c.tradePlan});
+}
+
+// 코인별 판정 (일봉) — 탭 안에서 60초 캐시
+const _p1Cache = {};
+async function analyzeForPosition(ticker) {
+  const hit = _p1Cache[ticker];
+  if (hit && Date.now() - hit.ts < 60000) return hit.p1;
+  const p1 = await fetchAnalysisPhase1(ticker, 'crypto', '1d');
+  _p1Cache[ticker] = {ts: Date.now(), p1};
+  return p1;
+}
+
+const fmtUsd = v => v == null || isNaN(v) ? '—' : `${v < 0 ? '-' : ''}$${Math.abs(v).toLocaleString(undefined, {maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 2})}`;
+const sgnPct = v => { const x = Math.abs(v) < 0.005 ? 0 : v; return `${x >= 0 ? '+' : ''}${x.toFixed(2)}%`; };
+const pnlCol = v => Math.abs(v) < 0.005 ? '#94a3b8' : v >= 0 ? '#4ade80' : '#f87171';
+
+// 전략 결과 표시 (분석 탭·내 포지션 탭 공용)
+function AdviceView({adv, ticker, amount, stance, deriv}) {
+  if (!adv) return null;
   const tipColor = {danger:'#f87171', warn:'#fbbf24', info:'#93c5fd', ok:'#4ade80'};
   const tipIcon  = {danger:'⛔', warn:'⚠️', info:'💡', ok:'✅'};
-  const seg = (on) => ({padding:'5px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',cursor:'pointer',fontSize:'.8rem',fontWeight:600});
-  const inp = {width:'100%',padding:'7px 10px',background:'#0f172a',border:'1px solid #334155',borderRadius:6,color:'#e2e8f0',fontSize:'.85rem'};
-  const lab = {fontSize:'.76rem',color:'#8794a8',marginBottom:4,display:'block'};
+  const st = STANCE_UI[stance] || STANCE_UI.neutral;
   const Box = ({label, value, color, sub}) => (
-    <div style={{flex:'1 1 140px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
+    <div style={{flex:'1 1 150px',background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'10px 12px'}}>
       <div style={{fontSize:'.74rem',color:'#8794a8',marginBottom:3}}>{label}</div>
       <div style={{fontSize:'.98rem',fontWeight:800,color:color||'#e2e8f0',fontFamily:'monospace'}}>{value}</div>
       {sub && <div style={{fontSize:'.74rem',color:'#8794a8',marginTop:2}}>{sub}</div>}
     </div>
   );
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12,padding:'10px 14px',borderRadius:8,
+        background: adv.sev==='danger'?'#450a0a':adv.sev==='warn'?'#451a03':'#052e16',
+        border:`1px solid ${adv.sev==='danger'?'#7f1d1d':adv.sev==='warn'?'#92400e':'#166534'}`}}>
+        <span style={{fontWeight:900,fontSize:'1rem',color:adv.sev==='danger'?'#f87171':adv.sev==='warn'?'#fbbf24':'#4ade80'}}>{adv.headline}</span>
+        <span style={{fontSize:'.78rem',color:'#94a3b8'}}>판정: <b style={{color:st.color}}>{st.label}</b> · {st.sub}</span>
+      </div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
+        <Box label="현재 손익 (가격 기준)" value={sgnPct(adv.movePct)} color={pnlCol(adv.movePct)} sub={adv.lev > 1 ? `증거금 기준 ${sgnPct(adv.marginPct)}` : null}/>
+        <Box label="계좌 영향" value={sgnPct(adv.accountPct)} color={pnlCol(adv.accountPct)}/>
+        <Box label="실질 노출 (총자산 대비)" value={`${adv.exposurePct.toFixed(0)}%`} color={adv.exposurePct > 100 ? '#fbbf24' : '#e2e8f0'} sub={adv.lev > 1 ? `${adv.lev}배 레버리지` : null}/>
+        <Box label="추적 손절선" value={fmtPx(adv.stop, ticker)} color="#fb923c" sub={`${adv.stopSrc} · 현재가 대비 ${sgnPct(adv.stopMovePct)}`}/>
+        <Box label="손절 시 추가 손실 (계좌)" value={`-${adv.riskFromNow.toFixed(2)}%`} color={adv.riskFromNow > ACCOUNT_RISK_LIMIT ? '#f87171' : '#94a3b8'} sub={`권장 ${ACCOUNT_RISK_LIMIT}% 이하`}/>
+        {adv.futures && <Box label="예상 청산가 (격리)" value={fmtPx(adv.liq, ticker)} color={adv.liqBeforeStop || adv.liqAtr < 3 ? '#f87171' : adv.liqAtr < 6 ? '#fbbf24' : '#e2e8f0'} sub={`현재가 대비 ${adv.liqDistPct.toFixed(1)}% · ${adv.liqAtr.toFixed(1)} ATR`}/>}
+        {adv.futures && <Box label="안전 레버리지" value={adv.safeLev ? `${adv.safeLev}배 이하` : '제한 없음'} color={adv.safeLev && adv.lev > adv.safeLev ? '#f87171' : '#4ade80'} sub={`현재 ${adv.lev}배 · 청산가가 손절선 바깥 1 ATR`}/>}
+        {adv.futures && <Box label="펀딩비 (증거금, 하루)" value={adv.fundDaily == null ? '—' : `${adv.fundDaily > 0 ? '-' : '+'}${Math.abs(adv.fundDaily).toFixed(3)}%`}
+          color={adv.fundDaily == null ? '#8794a8' : adv.fundDaily > 0 ? '#fbbf24' : '#4ade80'}
+          sub={adv.funding == null ? '선물 데이터 없음' : `${deriv?.fundingIntervalH || 8}시간마다 ${(adv.funding*100).toFixed(4)}% · ${adv.fundDaily > 0 ? '지급' : '수령'}`}/>}
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+        {adv.tips.map((t, i) => (
+          <div key={i} style={{fontSize:'.83rem',lineHeight:1.6,color:tipColor[t.lv],background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'8px 12px'}}>{tipIcon[t.lv]} {t.text}</div>
+        ))}
+      </div>
+      {adv.futures && <div style={{fontSize:'.74rem',color:'#8794a8',marginTop:8}}>청산가는 격리 마진·유지증거금률 {adv.mmr}% 가정 근사치입니다. 교차 마진은 거래소 화면의 청산가를 우선하세요.</div>}
+    </div>
+  );
+}
+
+// 포지션 등록·수정 폼
+function PositionForm({initial, onSave, onCancel}) {
+  const [f, setF] = React.useState(() => ({ticker:'', type:'spot', side:'long', lev:'3', avg:'', amount:'', memo:'', ...initial,
+    lev: String(initial?.lev ?? 3), avg: initial?.avg != null ? String(initial.avg) : '', amount: initial?.amount != null ? String(initial.amount) : ''}));
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF(p => ({...p, [k]: v}));
+  const seg = on => ({padding:'6px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',fontSize:'.82rem',fontWeight:600,borderRadius:0});
+  const lab = {fontSize:'.76rem',color:'#8794a8',marginBottom:4,display:'block'};
+  const fillPrice = async () => {
+    if (!f.ticker.trim()) return;
+    setBusy(true);
+    try { const p = await fetchCurrentPrice(f.ticker.trim()); if (p) set('avg', String(p)); else setErr('현재가를 가져오지 못했습니다'); }
+    catch { setErr('현재가를 가져오지 못했습니다'); } finally { setBusy(false); }
+  };
+  const save = () => {
+    const ticker = f.ticker.trim().toUpperCase().replace(/USDT$/, ''), avg = parseFloat(f.avg), amount = parseFloat(f.amount), lev = parseFloat(f.lev);
+    if (!ticker) return setErr('코인을 입력하세요');
+    if (!(avg > 0)) return setErr('평균 단가를 입력하세요');
+    if (!(amount > 0)) return setErr('투입 금액을 입력하세요');
+    if (f.type === 'futures' && !(lev >= 1 && lev <= 125)) return setErr('레버리지는 1~125배');
+    onSave({...initial, id: initial?.id || posId(), ticker, type: f.type, side: f.type === 'futures' ? f.side : 'long', lev: f.type === 'futures' ? lev : 1, avg, amount, memo: f.memo, createdAt: initial?.createdAt || Date.now()});
+  };
+  return (
+    <div style={{background:'#0a0f1a',border:'1px solid #334155',borderRadius:10,padding:14,marginBottom:12}}>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+        <div style={{flex:'1 1 110px'}}><span style={lab}>코인</span><input value={f.ticker} onChange={e => set('ticker', e.target.value)} placeholder="예: BTC"/></div>
+        <div><span style={lab}>거래 유형</span>
+          <div style={{display:'flex',borderRadius:6,overflow:'hidden'}}>
+            <button style={seg(f.type==='spot')} onClick={() => set('type','spot')}>현물</button>
+            <button style={seg(f.type==='futures')} onClick={() => set('type','futures')}>선물</button>
+          </div></div>
+        {f.type === 'futures' && <>
+          <div><span style={lab}>방향</span>
+            <div style={{display:'flex',borderRadius:6,overflow:'hidden'}}>
+              <button style={seg(f.side==='long')} onClick={() => set('side','long')}>롱</button>
+              <button style={seg(f.side==='short')} onClick={() => set('side','short')}>숏</button>
+            </div></div>
+          <div style={{width:90}}><span style={lab}>레버리지(배)</span><input type="number" min="1" max="125" value={f.lev} onChange={e => set('lev', e.target.value)}/></div>
+        </>}
+        <div style={{flex:'1 1 140px'}}><span style={lab}>평균 단가 ($)</span>
+          <div style={{display:'flex',gap:4}}><input type="number" value={f.avg} onChange={e => set('avg', e.target.value)}/>
+            <button className="btn-secondary" style={{padding:'6px 8px',fontSize:'.74rem',whiteSpace:'nowrap'}} onClick={fillPrice} disabled={busy} title="현재가로 채우기">현재가</button></div></div>
+        <div style={{flex:'1 1 140px'}}><span style={lab}>투입 금액 ($){f.type === 'futures' ? ' · 증거금' : ''}</span><input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="예: 2000"/></div>
+        <div style={{flex:'2 1 180px'}}><span style={lab}>메모 (선택)</span><input value={f.memo} onChange={e => set('memo', e.target.value)}/></div>
+      </div>
+      {err && <div style={{color:'#f87171',fontSize:'.8rem',marginTop:8}}>{err}</div>}
+      <div style={{display:'flex',gap:8,marginTop:10}}>
+        <button className="btn-primary" style={{padding:'7px 16px'}} onClick={save}>{initial?.id ? '수정 저장' : '포지션 추가'}</button>
+        {onCancel && <button className="btn-secondary" style={{padding:'7px 16px'}} onClick={onCancel}>취소</button>}
+      </div>
+    </div>
+  );
+}
+
+// ─── 💼 내 포지션 탭 ─────────────────────────────────────────────────────────
+function MyPositionsTab({onAnalyze}) {
+  const [acc, update] = useAccount();
+  const [an, setAn] = useState({});            // ticker → {p1, deriv, error}
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(null);       // 펼친 포지션 id
+  const [editing, setEditing] = useState(null); // 'new' | id
+  const [cashEdit, setCashEdit] = useState(false);
+  const tickers = [...new Set(acc.positions.map(p => p.ticker))];
+
+  const refresh = async () => {
+    if (!tickers.length) return;
+    setBusy(true);
+    const out = {}, queue = [...tickers];
+    const worker = async () => {
+      while (queue.length) {
+        const t = queue.shift();
+        try {
+          const p1 = await analyzeForPosition(t);
+          const fut = acc.positions.some(p => p.ticker === t && p.type === 'futures');
+          const deriv = fut ? await fetchDerivatives(t).catch(() => null) : null;
+          out[t] = {p1, deriv};
+        } catch (e) { out[t] = {error: e.message}; }
+        setAn(prev => ({...prev, [t]: out[t]}));
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    update(a => ({...a, prices: {...a.prices, ...Object.fromEntries(Object.entries(out).filter(([, v]) => v.p1).map(([t, v]) => [t, {price: v.p1.price, t: Date.now()}]))}}));
+    setBusy(false);
+  };
+  useEffect(() => { refresh(); }, [tickers.join(',')]);
+
+  const priceOf = t => an[t]?.p1?.price ?? acc.prices?.[t]?.price;
+  const T = accountTotals(acc, priceOf);
+  const items = T.rows.map(({p, v}) => {
+    const a = an[p.ticker];
+    const adv = a?.p1 ? adviceFor(p, a.p1, T.total, a.deriv) : null;
+    return {p, v, a, adv, stance: a?.p1?.computed?.verdict?.stance};
+  });
+  const totalRisk = items.reduce((s, x) => s + (x.adv ? x.adv.riskFromNow : 0), 0);
+  const fundDay = items.reduce((s, x) => s + (x.adv?.fundDaily != null ? x.adv.fundDaily / 100 * (x.p.amount || 0) : 0), 0);
+  const exposure = T.total > 0 ? T.notional / T.total * 100 : 0;
+  const Tile = ({label, value, sub, color, children}) => (
+    <div className="stat-card" style={{textAlign:'left'}}>
+      <div className="stat-label" style={{marginTop:0,marginBottom:4}}>{label}</div>
+      {children || <div className="stat-value" style={{fontSize:'1.25rem',color:color||'#e2e8f0'}}>{value}</div>}
+      {sub && <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:4}}>{sub}</div>}
+    </div>
+  );
+  const save = pos => { update(a => ({...a, positions: a.positions.some(x => x.id === pos.id) ? a.positions.map(x => x.id === pos.id ? pos : x) : [...a.positions, pos]})); setEditing(null); setOpen(pos.id); };
+  const remove = id => { if (confirm('이 포지션을 삭제할까요?')) update(a => ({...a, positions: a.positions.filter(x => x.id !== id)})); };
 
   return (
+    <div>
+      <div className="card">
+        <div className="card-title" style={{justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+          <span>💼 내 계좌</span>
+          <button className="btn-secondary" style={{padding:'6px 12px',fontSize:'.8rem'}} onClick={refresh} disabled={busy || !tickers.length}>{busy ? '불러오는 중...' : '🔄 새로고침'}</button>
+        </div>
+        <div className="price-tags">
+          <Tile label="총자산" value={fmtUsd(T.total)} sub="현금 + 포지션 평가액 (선물은 증거금 + 손익)"/>
+          <Tile label="현금 (USD)">
+            {cashEdit
+              ? <input type="number" autoFocus defaultValue={acc.cash || ''} onBlur={e => { update(a => ({...a, cash: Math.max(0, parseFloat(e.target.value) || 0)})); setCashEdit(false); }}
+                       onKeyDown={e => e.key === 'Enter' && e.target.blur()} style={{padding:'4px 8px'}}/>
+              : <div className="stat-value" style={{fontSize:'1.25rem',cursor:'pointer'}} onClick={() => setCashEdit(true)} title="눌러서 수정">{fmtUsd(+acc.cash || 0)} <span style={{fontSize:'.7rem',color:'#8794a8'}}>✏️</span></div>}
+          </Tile>
+          <Tile label="미실현 손익" value={fmtUsd(T.pnl)} color={pnlCol(T.pnl)} sub={T.invested ? sgnPct(T.pnl / T.invested * 100) + ' (투자금 대비)' : null}/>
+          <Tile label="총 노출" value={`${exposure.toFixed(0)}%`} color={exposure > 100 ? '#fbbf24' : '#e2e8f0'} sub="포지션 명목가 합 ÷ 총자산"/>
+        </div>
+        <div className="price-tags" style={{marginBottom:0}}>
+          <Tile label="모든 손절이 동시에 걸리면" value={`-${totalRisk.toFixed(1)}%`} color={totalRisk > 6 ? '#f87171' : totalRisk > 3 ? '#fbbf24' : '#94a3b8'} sub={`약 ${fmtUsd(-T.total * totalRisk / 100)} · 권장 6% 이하`}/>
+          <Tile label="펀딩비 (하루)" value={fundDay ? fmtUsd(-fundDay) : '—'} color={fundDay > 0 ? '#fbbf24' : fundDay < 0 ? '#4ade80' : '#94a3b8'} sub={fundDay ? `30일이면 약 ${fmtUsd(-fundDay * 30)}` : '선물 포지션 없음'}/>
+          <Tile label="현금 비중" value={T.total > 0 ? `${((+acc.cash || 0) / T.total * 100).toFixed(0)}%` : '—'}/>
+          <Tile label="포지션 수" value={acc.positions.length} sub={`판정 롱 ${items.filter(x => x.stance === 'long').length} · 회피·하락장 ${items.filter(x => x.stance === 'avoid' || x.stance === 'bear').length}`}/>
+        </div>
+        {totalRisk > 6 && <div className="alert-box alert-warn" style={{marginTop:12,fontSize:'.82rem'}}>⚠️ 모든 손절이 한꺼번에 걸리면 계좌의 {totalRisk.toFixed(1)}%를 잃습니다. 코인끼리는 함께 움직이는 경우가 많아 동시 손절이 드물지 않습니다 — 포지션당 1~2%, 합계 6% 이하를 권장합니다.</div>}
+      </div>
+
+      <div className="card">
+        <div className="card-title" style={{justifyContent:'space-between'}}>
+          <span>📋 포지션 ({acc.positions.length})</span>
+          {editing !== 'new' && <button className="btn-primary" style={{padding:'6px 14px',fontSize:'.82rem'}} onClick={() => setEditing('new')}>+ 포지션 추가</button>}
+        </div>
+        {editing === 'new' && <PositionForm initial={null} onSave={save} onCancel={() => setEditing(null)}/>}
+        {!acc.positions.length && editing !== 'new' && (
+          <div className="no-data">등록된 포지션이 없습니다.<br/>현금과 보유 코인을 등록하면 계좌 전체의 위험과 코인별 전략을 한곳에서 볼 수 있습니다.</div>
+        )}
+        {items.map(({p, v, a, adv, stance}) => {
+          const st = stance ? STANCE_UI[stance] : null, isOpen = open === p.id;
+          return (
+            <div key={p.id} style={{border:'1px solid #1e293b',borderRadius:10,marginBottom:8,overflow:'hidden',background: isOpen ? '#0f172a' : 'transparent'}}>
+              <div className="pos-row" onClick={() => setOpen(isOpen ? null : p.id)}>
+                <div>
+                  <div style={{fontWeight:800,fontSize:'1rem'}}>{p.ticker} <span className={`badge ${p.type === 'futures' ? (p.side === 'short' ? 'badge-red' : 'badge-green') : 'badge-gray'}`} style={{fontSize:'.7rem'}}>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</span></div>
+                  <div style={{fontSize:'.74rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {fmtUsd(p.amount)}</div>
+                </div>
+                <div><div style={{fontSize:'.74rem',color:'#8794a8'}}>현재가</div><div style={{fontFamily:'monospace',fontWeight:700}}>{v ? fmtPx(priceOf(p.ticker), p.ticker) : (a?.error ? '조회 실패' : '…')}</div></div>
+                <div><div style={{fontSize:'.74rem',color:'#8794a8'}}>손익</div><div style={{fontWeight:800,color: v ? pnlCol(v.pnlPct) : '#8794a8'}}>{v ? sgnPct(v.pnlPct) : '—'}</div><div style={{fontSize:'.74rem',color: v ? pnlCol(v.pnl) : '#8794a8'}}>{v ? fmtUsd(v.pnl) : ''}</div></div>
+                <div><div style={{fontSize:'.74rem',color:'#8794a8'}}>투입 비중</div><div style={{fontWeight:700}}>{T.total > 0 && p.amount ? `${(p.amount / T.total * 100).toFixed(1)}%` : '—'}</div></div>
+                <div className="pos-verdict">
+                  {st ? <div style={{fontWeight:800,color:st.color,fontSize:'.86rem'}}>{st.icon} {st.label} <span style={{fontWeight:500,color:'#8794a8'}}>{st.sub}</span></div> : <div style={{color:'#8794a8',fontSize:'.8rem'}}>{a?.error ? '판정 실패' : '판정 계산 중'}</div>}
+                  {adv && <div style={{fontSize:'.78rem',fontWeight:700,color: adv.sev === 'danger' ? '#f87171' : adv.sev === 'warn' ? '#fbbf24' : '#4ade80'}}>{adv.headline}</div>}
+                </div>
+              </div>
+              {isOpen && (
+                <div style={{padding:'0 14px 14px'}}>
+                  {editing === p.id ? <PositionForm initial={p} onSave={save} onCancel={() => setEditing(null)}/> : <>
+                    {p.memo && <div style={{fontSize:'.8rem',color:'#cbd5e1',marginBottom:8}}>📝 {p.memo}</div>}
+                    {a?.p1 && <div style={{fontSize:'.8rem',color:'#94a3b8',marginBottom:10,lineHeight:1.6}}>
+                      지표 점수 <b style={{color:'#e2e8f0'}}>{a.p1.computed.score > 0 ? '+' : ''}{a.p1.computed.score}</b> · {a.p1.computed.signals.slice(0, 3).join(' · ')}
+                      {a.p1.computed.regime && !a.p1.computed.regime.unknown && <> · BTC {a.p1.computed.regime.btcAbove ? '200일선 위' : <b style={{color:'#fb923c'}}>200일선 아래</b>}</>}
+                      {a.p1.rs && <> · BTC 대비 90일 <b style={{color: a.p1.rs.rel >= 0 ? '#4ade80' : '#f87171'}}>{a.p1.rs.rel >= 0 ? '+' : ''}{(a.p1.rs.rel*100).toFixed(1)}%</b></>}
+                    </div>}
+                    {a?.error && <div className="alert-box alert-err" style={{fontSize:'.8rem'}}>판정을 불러오지 못했습니다: {a.error}</div>}
+                    {adv ? <AdviceView adv={adv} ticker={p.ticker} amount={p.amount} stance={stance} deriv={a?.deriv}/> : !a?.error && <div style={{color:'#8794a8',fontSize:'.82rem'}}>계산 중...</div>}
+                    <div style={{display:'flex',gap:8,marginTop:12,flexWrap:'wrap'}}>
+                      <button className="btn-primary" style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={() => onAnalyze && onAnalyze(p.ticker)}>📊 분석 탭에서 자세히</button>
+                      <button className="btn-secondary" style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={() => setEditing(p.id)}>수정</button>
+                      <button className="btn-danger" style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={() => remove(p.id)}>삭제</button>
+                    </div>
+                  </>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{fontSize:'.76rem',color:'#8794a8',lineHeight:1.6,padding:'0 4px 16px'}}>
+        포지션 정보는 이 브라우저에만 저장됩니다. 판정과 손절선은 일봉 기준이며, 손절선은 검증된 규칙(최고 종가 − 3 ATR)을 현재가에 적용한 값입니다. 투자 권유가 아닙니다.
+      </div>
+    </div>
+  );
+}
+
+// ─── 분석 탭: 이 코인의 내 포지션 ───────────────────────────────────────────
+function TickerPositions({report, onOpenPositions}) {
+  const [acc, update] = useAccount();
+  const [adding, setAdding] = useState(false);
+  const ticker = (report?.ticker || '').toUpperCase();
+  const isCrypto = report?.market === 'crypto';
+  const mine = acc.positions.filter(p => p.ticker === ticker);
+  const anyFut = mine.some(p => p.type === 'futures');
+  const deriv = useDerivatives(ticker, isCrypto && anyFut);
+  useEffect(() => { if (ticker && report?.price && report.tfId === '1d') update(a => ({...a, prices: {...a.prices, [ticker]: {price: report.price, t: Date.now()}}})); }, [ticker, report?.price]);
+  if (!isCrypto || !report?.computed) return null;
+  const priceOf = t => t === ticker ? report.price : acc.prices?.[t]?.price;
+  const T = accountTotals(acc, priceOf);
+  const p1 = {price: report.price, computed: report.computed};
+  return (
     <div className="card">
-      <div className="card-title" style={{cursor:'pointer',userSelect:'none',justifyContent:'space-between'}} onClick={()=>setOpen(o=>!o)}>
-        <span>🧭 내 포지션 전략</span><span style={{fontSize:'.9rem',color:'#8794a8'}}>{open?'▲':'▼'}</span>
+      <div className="card-title" style={{justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <span>🧭 내 {ticker} 포지션</span>
+        <span style={{display:'flex',gap:6}}>
+          {!adding && <button className="btn-secondary" style={{padding:'5px 12px',fontSize:'.78rem'}} onClick={() => setAdding(true)}>+ 추가</button>}
+          <button className="btn-secondary" style={{padding:'5px 12px',fontSize:'.78rem'}} onClick={onOpenPositions}>💼 내 포지션 탭</button>
+        </span>
       </div>
-      {open && <>
-      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end',marginBottom:14}}>
-        <div>
-          <span style={lab}>거래 유형</span>
-          <div style={{display:'flex'}}>
-            <button style={{...seg(!futures),borderRadius:'6px 0 0 6px'}} onClick={()=>set('futures',false)}>현물</button>
-            <button style={{...seg(futures),borderRadius:'0 6px 6px 0',opacity:isCrypto?1:0.4,cursor:isCrypto?'pointer':'not-allowed'}}
-              onClick={()=>isCrypto && set('futures',true)} title={isCrypto?'':'선물(레버리지)은 코인에서만 지원'}>선물(레버리지)</button>
-          </div>
-        </div>
-        {futures && <>
-          <div>
-            <span style={lab}>방향</span>
-            <div style={{display:'flex'}}>
-              <button style={{...seg(f.side==='long'),borderRadius:'6px 0 0 6px'}} onClick={()=>set('side','long')}>롱</button>
-              <button style={{...seg(f.side==='short'),borderRadius:'0 6px 6px 0'}} onClick={()=>set('side','short')}>숏</button>
+      {adding && <PositionForm initial={{ticker, avg: report.price}} onSave={pos => { update(a => ({...a, positions: [...a.positions, pos]})); setAdding(false); }} onCancel={() => setAdding(false)}/>}
+      {!mine.length && !adding && <div style={{fontSize:'.83rem',color:'#8794a8'}}>{ticker}를 보유 중이면 "+ 추가"로 등록하세요. 손익·손절 시 계좌 손실·청산가·전략이 여기와 💼 내 포지션 탭에 함께 표시됩니다.</div>}
+      {mine.map(p => {
+        const v = valuePosition(p, report.price);
+        const adv = adviceFor(p, p1, T.total, deriv.data);
+        return (
+          <div key={p.id} style={{marginBottom:14}}>
+            <div style={{fontSize:'.84rem',color:'#cbd5e1',marginBottom:8}}>
+              <b>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</b> · 평단 {fmtPx(p.avg, ticker)} · 투입 {fmtUsd(p.amount)}
+              {v && <> · 손익 <b style={{color: pnlCol(v.pnlPct)}}>{sgnPct(v.pnlPct)} ({fmtUsd(v.pnl)})</b></>}
+              {T.total > 0 && <> · 비중 {(p.amount / T.total * 100).toFixed(1)}%</>}
             </div>
+            <AdviceView adv={adv} ticker={ticker} amount={p.amount} stance={stanceOf(report)} deriv={deriv.data}/>
           </div>
-          <div style={{width:90}}>
-            <span style={lab}>레버리지(배)</span>
-            <input style={inp} type="number" min="1" max="125" value={f.lev} onChange={e=>set('lev',e.target.value)}/>
-          </div>
-        </>}
-        <div style={{flex:'1 1 130px'}}>
-          <span style={lab}>평균 단가 ({currencySym(ticker)})</span>
-          <input style={inp} type="number" placeholder={String(report.price ?? '')} value={f.avg} onChange={e=>set('avg',e.target.value)}/>
-        </div>
-        <div style={{flex:'1 1 110px'}}>
-          <span style={lab}>비중 (총자산 대비 %{futures?', 증거금':''})</span>
-          <input style={inp} type="number" min="0" max="100" placeholder="예: 20" value={f.weight} onChange={e=>set('weight',e.target.value)}/>
-        </div>
-        <div style={{flex:'1 1 130px'}}>
-          <span style={lab}>총자산 (선택, 금액 표시용)</span>
-          <input style={inp} type="number" placeholder="예: 10000000" value={f.total} onChange={e=>set('total',e.target.value)}/>
-        </div>
-      </div>
-
-      {!adv ? (
-        <div style={{fontSize:'.83rem',color:'#8794a8',padding:'6px 0 4px'}}>평균 단가와 비중을 입력하면 손익·손절 시 계좌 손실{isCrypto?'·청산가':''}와 전략을 계산합니다. 입력값은 이 브라우저에 종목별로 저장됩니다.</div>
-      ) : <>
-        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12,padding:'10px 14px',borderRadius:8,
-          background: adv.sev==='danger'?'#450a0a':adv.sev==='warn'?'#451a03':'#052e16',
-          border:`1px solid ${adv.sev==='danger'?'#7f1d1d':adv.sev==='warn'?'#92400e':'#166534'}`}}>
-          <span style={{fontWeight:900,fontSize:'1rem',color:adv.sev==='danger'?'#f87171':adv.sev==='warn'?'#fbbf24':'#4ade80'}}>{adv.headline}</span>
-          <span style={{fontSize:'.76rem',color:'#94a3b8'}}>판정: {STANCE_UI[stanceOf(report)].label} · {STANCE_UI[stanceOf(report)].sub}</span>
-        </div>
-
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
-          <Box label="현재 손익 (가격 기준)" value={sgn(adv.movePct)} color={col(adv.movePct)} sub={adv.lev>1 ? `증거금 기준 ${sgn(adv.marginPct)}` : null}/>
-          <Box label="계좌 영향" value={sgn(adv.accountPct)} color={col(adv.accountPct)} sub={total ? `약 ${Math.round(total*adv.accountPct/100).toLocaleString()}` : null}/>
-          <Box label="실질 노출 (총자산 대비)" value={`${adv.exposurePct.toFixed(0)}%`} color={adv.exposurePct>100?'#fbbf24':'#e2e8f0'} sub={`비중 ${f.weight}% × ${adv.lev}배`}/>
-          <Box label="보호 손절선" value={fmtPx(adv.stop, ticker)} color="#fb923c" sub={`${adv.stopSrc} · 현재가 대비 ${sgn(adv.stopMovePct)}`}/>
-          <Box label="손절 시 추가 손실 (계좌)" value={`-${adv.riskFromNow.toFixed(2)}%${money(adv.riskFromNow)}`} color={adv.riskFromNow>ACCOUNT_RISK_LIMIT?'#f87171':'#94a3b8'} sub={`권장 ${ACCOUNT_RISK_LIMIT}% 이하 · 평단 기준 ${sgn(adv.accountAtStop)}`}/>
-          {adv.futures && <Box label="예상 청산가 (격리)" value={fmtPx(adv.liq, ticker)} color={adv.liqBeforeStop||adv.liqAtr<3?'#f87171':adv.liqAtr<6?'#fbbf24':'#e2e8f0'} sub={`현재가 대비 ${adv.liqDistPct.toFixed(1)}% · ${adv.liqAtr.toFixed(1)} ATR`}/>}
-          {adv.futures && <Box label="안전 레버리지 (손절선 바깥 1 ATR)" value={adv.safeLev ? `${adv.safeLev}배 이하` : '제한 없음'} color={adv.safeLev && adv.lev>adv.safeLev?'#f87171':'#4ade80'} sub={`현재 ${adv.lev}배`}/>}
-          {adv.futures && <Box label="펀딩비 비용 (증거금, 하루)" value={adv.fundDaily == null ? (deriv.loading ? '조회 중' : '—') : `${adv.fundDaily > 0 ? '-' : '+'}${Math.abs(adv.fundDaily).toFixed(3)}%`}
-            color={adv.fundDaily == null ? '#8794a8' : adv.fundDaily > 0 ? '#fbbf24' : '#4ade80'}
-            sub={adv.funding == null ? '선물 데이터 없음' : `${deriv.data?.fundingIntervalH || 8}시간마다 ${(adv.funding*100).toFixed(4)}% · ${adv.fundDaily > 0 ? '지급' : '수령'}`}/>}
-        </div>
-
-        <div style={{display:'flex',flexDirection:'column',gap:6}}>
-          {adv.tips.map((t,i)=>(
-            <div key={i} style={{fontSize:'.83rem',lineHeight:1.6,color:tipColor[t.lv],background:'#0a0f1a',border:'1px solid #1e293b',borderRadius:8,padding:'8px 12px'}}>
-              {tipIcon[t.lv]} {t.text}
-            </div>
-          ))}
-        </div>
-        <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:10,lineHeight:1.6}}>
-          {adv.futures && `청산가는 격리 마진·유지증거금률 ${adv.mmr}% 가정 근사치이며 수수료·펀딩비를 제외합니다. 교차 마진은 계좌 잔고에 따라 달라지므로 거래소 화면의 청산가를 우선하세요. `}
-          보호 손절선은 가까운 지지·저항과 ATR로 계산한 참고값입니다. 판정별 과거 성과는 위 실측 통계를 참고하세요. 투자 권유가 아닙니다.
-        </div>
-      </>}
-      </>}
+        );
+      })}
     </div>
   );
 }
@@ -3600,7 +3833,7 @@ function ModeSelector({mode, onChange}) {
 }
 
 // ─── Analysis Tab ─────────────────────────────────────────────────────────────
-function AnalysisTab({apiKey, settings, serverHasKey}) {
+function AnalysisTab({apiKey, settings, serverHasKey, jump, onJumpDone, onOpenPositions}) {
   const [query, setQuery]   = useState('');
   const [mode, setMode]     = useState('crypto');   // 코인 전용
   const [loading, setLoading] = useState(false);
@@ -3733,6 +3966,13 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
   const autoTickers = QUICK_TICKERS;
   const quickList = QUICK_TICKERS;
 
+  // 내 포지션 탭에서 "분석 탭에서 자세히"로 넘어오면 그 코인을 바로 분석
+  useEffect(() => {
+    if (!jump?.t) return;
+    setQuery(jump.t); handleAnalyze(jump.t, 'crypto');
+    onJumpDone && onJumpDone();
+  }, [jump?.k]);
+
   const shown = report || (phase1 ? buildLocalReport(phase1) : null);
 
   return (
@@ -3826,7 +4066,7 @@ function AnalysisTab({apiKey, settings, serverHasKey}) {
 
           <DerivativesCard key={'d-'+shown.ticker} report={shown}/>
 
-          <div id="sec-pos"><PositionAdvisor key={shown.ticker} report={shown}/></div>
+          <div id="sec-pos"><TickerPositions key={shown.ticker} report={shown} onOpenPositions={onOpenPositions}/></div>
 
           <div id="sec-ai">
 
@@ -4345,159 +4585,6 @@ function BacktestTab() {
 }
 
 // ─── Portfolio Tab ────────────────────────────────────────────────────────────
-function PortfolioTab() {
-  const [portfolio, setPortfolio] = useState(()=>loadPortfolio());
-  const [withPrices, setWithPrices] = useState([]);
-  const [loading, setLoading]       = useState(false);
-  const [corrData, setCorrData]     = useState(null);
-  const [corrLoading, setCorrLoading] = useState(false);
-  const [form, setForm] = useState({ticker:'',shares:'',avgCost:''});
-  const [formErr, setFormErr] = useState('');
-  const [tab, setTab]    = useState('holdings');
-
-  const refreshPrices = async (p) => {
-    setLoading(true);
-    try {
-      const updated = await getPortfolioWithPrices(p||portfolio);
-      setWithPrices(updated);
-    } catch(e) { console.error(e); }
-    finally { setLoading(false); }
-  };
-
-  useEffect(()=>{ if(portfolio.length) refreshPrices(portfolio); },[]);
-
-  const addItem = () => {
-    if(!form.ticker||!form.shares||!form.avgCost){setFormErr('모든 필드를 입력해주세요.');return;}
-    const item = {id:Date.now(), ticker:form.ticker.trim().toUpperCase(), shares:parseFloat(form.shares), avgCost:parseFloat(form.avgCost)};
-    const next = [...portfolio, item];
-    setPortfolio(next); savePortfolio(next);
-    setForm({ticker:'',shares:'',avgCost:''}); setFormErr('');
-    refreshPrices(next);
-  };
-
-  const removeItem = id => {
-    const next = portfolio.filter(p=>p.id!==id);
-    setPortfolio(next); savePortfolio(next);
-    setWithPrices(prev=>prev.filter(p=>p.id!==id));
-  };
-
-  const totalValue  = withPrices.reduce((a,p)=>a+(p.currentValue||0),0);
-  const totalCost   = portfolio.reduce((a,p)=>a+p.avgCost*p.shares,0);
-  const totalPnl    = totalValue - totalCost;
-  const totalPnlPct = totalCost>0 ? totalPnl/totalCost*100 : 0;
-
-  const computeCorr = async () => {
-    if(portfolio.length<2){alert('최소 2개 종목이 필요합니다.');return;}
-    setCorrLoading(true);
-    try { const r = await computeCorrelationMatrix(portfolio); setCorrData(r); }
-    catch(e) { alert('상관관계 계산 실패: '+e.message); }
-    finally { setCorrLoading(false); }
-  };
-
-  const corrColor = v => {
-    const r = Math.round(255*(v>0?0:Math.abs(v)));
-    const g = Math.round(255*(v>0?v:0));
-    return `rgba(${r},${g},60,${Math.abs(v)*0.8+0.2})`;
-  };
-
-  return (
-    <div>
-      <div className="card">
-        <div className="card-title">🏦 포트폴리오 관리</div>
-        <div className="tabs-inner">
-          {[['holdings','보유 종목'],['add','종목 추가'],['correlation','상관관계']].map(([k,l])=>(
-            <button key={k} className={`tab-inner-btn ${tab===k?'active':''}`} onClick={()=>setTab(k)}>{l}</button>
-          ))}
-        </div>
-
-        {tab==='holdings' && (
-          <>
-            {loading && <div style={{textAlign:'center',padding:20,color:'#8794a8'}}>가격 업데이트 중...</div>}
-            {portfolio.length===0 ? (
-              <div className="no-data">포트폴리오가 비어있습니다.<br/>종목 추가 탭에서 추가해보세요.</div>
-            ) : (
-              <>
-                <div className="grid-3" style={{marginBottom:16}}>
-                  <div className="stat-card"><div className="stat-value">${totalValue.toLocaleString(undefined,{maximumFractionDigits:0})}</div><div className="stat-label">총 평가금액</div></div>
-                  <div className="stat-card"><div className="stat-value" style={{color:totalPnl>=0?'#34d399':'#f87171'}}>{totalPnl>=0?'+':''}{totalPnlPct.toFixed(2)}%</div><div className="stat-label">총 손익률</div></div>
-                  <div className="stat-card"><div className="stat-value">{portfolio.length}</div><div className="stat-label">보유 종목</div></div>
-                </div>
-                <table>
-                  <thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>손익</th><th>손익률</th><th></th></tr></thead>
-                  <tbody>
-                    {withPrices.map(p=>(
-                      <tr key={p.id}>
-                        <td style={{fontWeight:700,color:'#60a5fa'}}>{p.ticker}</td>
-                        <td>{p.shares}</td>
-                        <td>${p.avgCost?.toLocaleString()}</td>
-                        <td>{p.currentPrice?`$${p.currentPrice.toLocaleString(undefined,{maximumFractionDigits:2})}`:'-'}</td>
-                        <td style={{color:p.pnl>=0?'#34d399':'#f87171'}}>{p.pnl!=null?`${p.pnl>=0?'+':''}$${Math.abs(p.pnl).toFixed(0)}`:'-'}</td>
-                        <td><span className={`badge ${(p.pnlPct||0)>=0?'badge-green':'badge-red'}`}>{p.pnlPct!=null?`${p.pnlPct>=0?'+':''}${p.pnlPct.toFixed(2)}%`:'-'}</span></td>
-                        <td><button className="btn-danger" style={{padding:'2px 8px',fontSize:'.75rem'}} onClick={()=>removeItem(p.id)}>삭제</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <button className="btn-secondary" style={{marginTop:12,padding:'6px 14px',fontSize:'.85rem'}} onClick={()=>refreshPrices()}>🔄 가격 새로고침</button>
-              </>
-            )}
-          </>
-        )}
-
-        {tab==='add' && (
-          <div style={{maxWidth:400}}>
-            <div className="settings-group">
-              <label>티커</label>
-              <input value={form.ticker} onChange={e=>setForm(f=>({...f,ticker:e.target.value}))} placeholder="예: BTC, ETH, SOL"/>
-            </div>
-            <div className="settings-group">
-              <label>수량</label>
-              <input type="number" value={form.shares} onChange={e=>setForm(f=>({...f,shares:e.target.value}))} placeholder="예: 10"/>
-            </div>
-            <div className="settings-group">
-              <label>평균 매입단가 (USD)</label>
-              <input type="number" value={form.avgCost} onChange={e=>setForm(f=>({...f,avgCost:e.target.value}))} placeholder="예: 150.00"/>
-            </div>
-            {formErr && <div className="alert-box alert-err">{formErr}</div>}
-            <button className="btn-primary" onClick={addItem}>종목 추가</button>
-          </div>
-        )}
-
-        {tab==='correlation' && (
-          <>
-            <button className="btn-primary" onClick={computeCorr} disabled={corrLoading||portfolio.length<2} style={{marginBottom:16}}>
-              {corrLoading?'계산 중...':'상관관계 분석'}
-            </button>
-            {corrData && (
-              <div className="correlation-grid">
-                <table className="corr-table">
-                  <thead>
-                    <tr><th></th>{corrData.labels.map(l=><th key={l} style={{color:'#94a3b8',padding:'6px 8px'}}>{l}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {corrData.matrix.map((row,i)=>(
-                      <tr key={i}>
-                        <td style={{color:'#94a3b8',padding:'6px 8px',fontWeight:700}}>{corrData.labels[i]}</td>
-                        {row.map((v,j)=>(
-                          <td key={j} className="corr-cell" style={{background:corrColor(v),color:'#fff'}}>
-                            {v.toFixed(2)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p style={{fontSize:'.75rem',color:'#8794a8',marginTop:8}}>
-                  녹색: 양의 상관관계 / 적색: 음의 상관관계 / 백색: 무상관
-                </p>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ─── Monitor Tab ──────────────────────────────────────────────────────────────
 function MonitorTab({apiKey, settings, serverHasKey}) {
@@ -4721,6 +4808,7 @@ function ApiKeyModal({onSave, onSkip}) {
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [tab, setTab]           = useState('analysis');
+  const [jump, setJump]         = useState(null);   // 다른 탭에서 분석 탭으로 넘길 코인
   const [settings, setSettings] = useState(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
   const [showApiModal, setShowApiModal] = useState(false);
@@ -4749,7 +4837,7 @@ function App() {
     {id:'compare',   label:'⚖ 비교'},
     {id:'performance',label:'📈 성과'},
     {id:'backtest',  label:'🔬 백테스트'},
-    {id:'portfolio', label:'🏦 포트폴리오'},
+    {id:'positions', label:'💼 내 포지션'},
     {id:'monitor',   label:'👁 모니터'},
   ];
 
@@ -4786,11 +4874,11 @@ function App() {
       </div>
 
       <div className="main-content">
-        {tab==='analysis'    && <AnalysisTab    apiKey={activeKey} settings={settings} serverHasKey={false}/>}
+        {tab==='analysis'    && <AnalysisTab    apiKey={activeKey} settings={settings} serverHasKey={false} jump={jump} onJumpDone={()=>setJump(null)} onOpenPositions={()=>setTab('positions')}/>}
         {tab==='compare'     && <CompareTab     apiKey={activeKey} serverHasKey={false}/>}
         {tab==='performance' && <PerformanceTab apiKey={activeKey} serverHasKey={false}/>}
         {tab==='backtest'    && <BacktestTab/>}
-        {tab==='portfolio'   && <PortfolioTab/>}
+        {tab==='positions'   && <MyPositionsTab onAnalyze={t=>{ setJump({t, k: Date.now()}); setTab('analysis'); }}/>}
         {tab==='monitor'     && <MonitorTab     apiKey={activeKey} settings={settings} serverHasKey={false}/>}
       </div>
 
