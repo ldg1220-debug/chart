@@ -992,11 +992,19 @@ function prepareCandles(ohlcv, type) {
 }
 
 // ─── 내 포지션 전략 (평단·비중·레버리지 → 리스크 수치 + 규칙 기반 조언) ─────────
-// 모든 수치는 결정론적 계산. 청산가는 격리 마진 근사치(유지증거금률 mmr, 수수료·펀딩비 제외).
+// 모든 수치는 결정론적 계산. 청산가는 격리 마진 기준(유지증거금률 mmr, 이후 수수료·펀딩비 제외).
+// 격리 청산가: 롱 (수량×평단 − 증거금) ÷ (수량×(1−mmr)), 숏 (수량×평단 + 증거금) ÷ (수량×(1+mmr)).
+// 거래소 화면의 증거금을 넣으면 거래소 청산가와 일치한다 (BTCUSDC 0.205개 10배 증거금 1,577.37 → 75,622.6, 거래소 75,622.7).
+function liqPrice(side, qty, avg, margin, mmr = 0.5) {
+  if (!(qty > 0) || !(avg > 0) || !(margin >= 0)) return null;
+  const m = mmr / 100;
+  const liq = side > 0 ? (qty * avg - margin) / (qty * (1 - m)) : (qty * avg + margin) / (qty * (1 + m));
+  return liq > 0 ? liq : null;   // 롱이 증거금 ≥ 명목가면 청산 없음
+}
 const ACCOUNT_RISK_LIMIT = 2;   // 손절 시 계좌 손실 한도(%) — 일반적인 1~2% 규칙
 
 function buildPositionAdvice(inp, ctx) {
-  const {avg, weightPct, futures, side: sideIn, mmr = 0.5, funding = null, fundingIntervalH = 8} = inp;
+  const {avg, weightPct, futures, side: sideIn, mmr = 0.5, funding = null, fundingIntervalH = 8, marginRatio = 1, amount = null} = inp;
   const lev = futures ? Math.max(1, Number(inp.lev) || 1) : 1;
   const side = futures && sideIn === 'short' ? -1 : 1;       // 현물은 항상 롱
   const {price, atr, levels, stance, plan} = ctx;
@@ -1017,22 +1025,26 @@ function buildPositionAdvice(inp, ctx) {
   const riskFromNow = Math.abs(stopMovePct) * exposurePct / 100;  // 지금부터 손절까지 추가 손실(계좌 %) = 현재 명목가 × 손절폭
 
   // 청산가 (선물·격리 근사) 와 안전 레버리지(손절선보다 1 ATR 더 바깥에 청산가)
-  let liq = null, liqDistPct = null, liqAtr = null, safeLev = null, liqBeforeStop = false, liqTooClose = false;
+  let liq = null, liqDistPct = null, liqAtr = null, safeLev = null, liqBeforeStop = false, liqTooClose = false, addMarginUsd = null;
   if (futures) {
-    liq = side > 0 ? avg * (1 - 1/lev + m) : avg * (1 + 1/lev - m);
-    liqDistPct = side * (price / liq - 1) * 100;
+    // 수량 1 기준: 증거금 = 평단 ÷ 레버리지 × marginRatio (거래소 실제 증거금 ÷ 초기 증거금)
+    liq = liqPrice(side, 1, avg, avg / lev * marginRatio, mmr) ?? 0;   // 0 = 청산 없음 (1배 롱)
+    liqDistPct = liq > 0 ? side * (price / liq - 1) * 100 : 100;
     liqAtr = Math.abs(price - liq) / a;
     liqBeforeStop = side > 0 ? liq >= stop : liq <= stop;
-    const guard = side > 0 ? (stop - a) / avg : (stop + a) / avg;
-    const denom = side > 0 ? 1 + m - guard : guard - 1 + m;
+    const guard = side > 0 ? (stop - a) / avg : (stop + a) / avg;   // 목표 청산가 ÷ 평단
+    const denom = side > 0 ? 1 - guard * (1 - m) : guard * (1 + m) - 1;
     safeLev = denom > 0 ? Math.max(1, Math.floor(1 / denom)) : null;
     liqTooClose = side > 0 ? liq > stop - a : liq < stop + a;      // 청산가가 '손절선 바깥 1 ATR' 안쪽 = 안전 레버리지 초과
+    // 청산가를 손절선 바깥 1 ATR로 밀어내는 데 필요한 추가 증거금 (투입 금액 대비 비율 → 달러)
+    const needRatio = side > 0 ? lev * (1 - guard * (1 - m)) : lev * (guard * (1 + m) - 1);
+    addMarginUsd = liqTooClose && amount > 0 && needRatio > marginRatio ? (needRatio - marginRatio) * amount : null;
   }
 
 
   const tips = [];   // {lv: 'danger'|'warn'|'info'|'ok', text}
-  if (futures && liqBeforeStop) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 보호 손절선(${fmtN(stop)})보다 먼저 옵니다. 손절이 작동하기 전에 청산됩니다 → 레버리지를 ${safeLev ? safeLev + '배 이하로' : '크게'} 낮추거나 증거금을 추가하세요.`});
-  else if (futures && liqTooClose) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 손절선(${fmtN(stop)})과 1 ATR도 떨어져 있지 않습니다. 꼬리·갭 한 번에 손절 대신 청산될 수 있습니다 → ${safeLev ? safeLev + '배 이하' : '더 낮은 레버리지'}를 권장합니다.`});
+  if (futures && liqBeforeStop) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 보호 손절선(${fmtN(stop)})보다 먼저 옵니다. 손절이 작동하기 전에 청산됩니다 → 레버리지를 ${safeLev ? safeLev + '배 이하로' : '크게'} 낮추거나 증거금을 ${addMarginUsd ? "$" + fmtN(Math.ceil(addMarginUsd)) + ' 이상 ' : ''}추가하세요.`});
+  else if (futures && liqTooClose) tips.push({lv:'danger', text:`청산가(${fmtN(liq)})가 손절선(${fmtN(stop)})과 1 ATR도 떨어져 있지 않습니다. 꼬리·갭 한 번에 손절 대신 청산될 수 있습니다 → ${safeLev ? safeLev + '배 이하' : '더 낮은 레버리지'}${addMarginUsd ? ` 또는 증거금 ${"$" + fmtN(Math.ceil(addMarginUsd))} 이상 추가` : ''}를 권장합니다.`});
   else if (futures && liqAtr < 6) tips.push({lv:'warn', text:`손절선이 먼저 작동하는 구조지만 청산가까지 ${liqAtr.toFixed(1)} ATR입니다. 손절 주문을 반드시 걸어두세요 (미설정 시 급변동에 청산 위험).`});
   if (riskFromNow > ACCOUNT_RISK_LIMIT) {
     const cut = Math.round((1 - ACCOUNT_RISK_LIMIT / riskFromNow) * 100);
@@ -1072,7 +1084,7 @@ function buildPositionAdvice(inp, ctx) {
     : side > 0 && stance === 'long' ? '보유 유지 · 손절선 관리'
     : '보유 유지 · 추가 매수 보류';
   return {side, lev, futures, movePct, marginPct, accountPct, exposurePct, stop, stopSrc, stopMovePct, accountAtStop, riskFromNow,
-          liq, liqDistPct, liqAtr, liqBeforeStop, safeLev, tips, sev, headline, mmr, fundDaily, funding};
+          liq, liqDistPct, liqAtr, liqBeforeStop, safeLev, addMarginUsd, tips, sev, headline, mmr, fundDaily, funding};
 }
 function fmtN(v) { return v==null||isNaN(v) ? '—' : Math.abs(v)>=1 ? Number(v).toLocaleString(undefined,{maximumFractionDigits:2}) : Number(v).toPrecision(4); }
 
@@ -3159,7 +3171,8 @@ function TrackRecordCard({report}) {
 
 // ─── 내 포지션: 계좌·포지션 저장소 ───────────────────────────────────────────
 // cs_account = {cash, positions:[{id, ticker, type:'spot'|'futures', side, lev, avg, amount, memo, createdAt}], prices:{T:{price,t}}}
-// amount = 투입 금액(USD). 선물은 증거금. 비중은 amount ÷ 총자산으로 자동 계산한다.
+// amount = 투입 금액(USD). 선물은 초기 증거금(수량 × 평단 ÷ 레버리지). 비중은 평가액 ÷ 총자산으로 자동 계산한다.
+// margin = (선물, 선택) 거래소 화면의 실제 격리 증거금. 수수료·펀딩·증거금 추가로 초기 증거금과 달라지며 청산가·평가액에 쓴다.
 const ACCOUNT_KEY = 'cs_account';
 const posId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
@@ -3195,13 +3208,15 @@ function useAccount() {
 }
 
 // 현재가로 포지션 평가
+const posLev = p => p.type === 'futures' ? Math.max(1, +p.lev || 1) : 1;
+const posQty = p => p.amount > 0 && p.avg > 0 ? p.amount * posLev(p) / p.avg : 0;
+const posMargin = p => p.type === 'futures' && p.margin > 0 ? +p.margin : (p.amount || 0);
 function valuePosition(p, price) {
   if (!(p.avg > 0) || !(p.amount > 0) || !(price > 0)) return null;
-  const lev = p.type === 'futures' ? Math.max(1, +p.lev || 1) : 1;
-  const side = p.type === 'futures' && p.side === 'short' ? -1 : 1;
-  const qty = p.amount * lev / p.avg;
+  const lev = posLev(p), side = p.type === 'futures' && p.side === 'short' ? -1 : 1;
+  const qty = posQty(p), margin = posMargin(p);
   const pnl = side * qty * (price - p.avg);
-  return {lev, side, qty, pnl, pnlPct: pnl / p.amount * 100, equity: p.type === 'futures' ? Math.max(0, p.amount + pnl) : qty * price, notional: qty * price};
+  return {lev, side, qty, margin, pnl, pnlPct: pnl / p.amount * 100, equity: p.type === 'futures' ? Math.max(0, margin + pnl) : qty * price, notional: qty * price};
 }
 function accountTotals(acc, priceOf) {
   const rows = acc.positions.map(p => ({p, v: valuePosition(p, priceOf(p.ticker))}));
@@ -3216,6 +3231,7 @@ function adviceFor(p, p1, total, deriv) {
   const c = p1.computed;
   return buildPositionAdvice(
     {avg: p.avg, weightPct: (p.amount || 0) / total * 100, lev: p.lev, futures: p.type === 'futures', side: p.side,
+     marginRatio: p.amount > 0 ? posMargin(p) / p.amount : 1, amount: p.amount,
      funding: deriv?.available ? deriv.funding : null, fundingIntervalH: deriv?.fundingIntervalH || 8},
     {price: p1.price, atr: c.atr, levels: c.levels, stance: c.verdict.stance, plan: c.tradePlan});
 }
@@ -3272,7 +3288,7 @@ function AdviceView({adv, ticker, amount, stance, deriv}) {
           <div key={i} style={{fontSize:'.83rem',lineHeight:1.6,color:tipColor[t.lv],background:'#172338',border:'1px solid #1e293b',borderRadius:8,padding:'8px 12px'}}>{tipIcon[t.lv]} {t.text}</div>
         ))}
       </div>
-      {adv.futures && <div style={{fontSize:'.8rem',color:'#8794a8',marginTop:8}}>청산가는 격리 마진·유지증거금률 {adv.mmr}% 가정 근사치입니다. 교차 마진은 거래소 화면의 청산가를 우선하세요.</div>}
+      {adv.futures && <div style={{fontSize:'.8rem',color:'#8794a8',marginTop:8}}>청산가는 격리 마진·유지증거금률 {adv.mmr}% 기준입니다. 포지션 수정에서 거래소 화면의 증거금(Margin)을 넣으면 거래소 청산가와 맞습니다. 교차 마진은 거래소 화면의 청산가를 우선하세요.</div>}
     </div>
   );
 }
@@ -3281,7 +3297,8 @@ function AdviceView({adv, ticker, amount, stance, deriv}) {
 function PositionForm({initial, onSave, onCancel}) {
   const [f, setF] = React.useState(() => ({ticker:'', type:'spot', side:'long', lev:'3', avg:'', amount:'', memo:'', mode:'amount', qty:'', ...initial,
     lev: String(initial?.lev ?? 3), avg: initial?.avg != null ? String(initial.avg) : '', amount: initial?.amount != null ? String(initial.amount) : '',
-    qty: initial?.amount > 0 && initial?.avg > 0 ? String(+(initial.amount * (initial.lev || 1) / initial.avg).toPrecision(8)) : ''}));
+    qty: initial?.amount > 0 && initial?.avg > 0 ? String(+(initial.amount * (initial.lev || 1) / initial.avg).toPrecision(8)) : '',
+    margin: initial?.margin > 0 ? String(initial.margin) : ''}));
   // 수량 ↔ 투입 금액 환산: 현물 금액 = 수량 × 평단, 선물 증거금 = 수량 × 평단 ÷ 레버리지
   const levN = f.type === 'futures' ? (parseFloat(f.lev) || 1) : 1, avgN = parseFloat(f.avg);
   const amountFromQty = q => q > 0 && avgN > 0 ? q * avgN / levN : null;
@@ -3306,7 +3323,8 @@ function PositionForm({initial, onSave, onCancel}) {
     if (!(avg > 0)) return setErr('평균 단가를 입력하세요');
     if (!(amount > 0)) return setErr(f.mode === 'qty' ? '수량과 평균 단가를 입력하세요' : '투입 금액을 입력하세요');
     if (f.type === 'futures' && !(lev >= 1 && lev <= 125)) return setErr('레버리지는 1~125배');
-    onSave({...initial, id: initial?.id || posId(), ticker, type: f.type, side: f.type === 'futures' ? f.side : 'long', lev: f.type === 'futures' ? lev : 1, avg, amount, memo: f.memo, createdAt: initial?.createdAt || Date.now()});
+    const margin = f.type === 'futures' && parseFloat(f.margin) > 0 ? parseFloat(f.margin) : undefined;
+    onSave({...initial, id: initial?.id || posId(), ticker, type: f.type, side: f.type === 'futures' ? f.side : 'long', lev: f.type === 'futures' ? lev : 1, avg, amount, margin, memo: f.memo, createdAt: initial?.createdAt || Date.now()});
   };
   return (
     <div style={{background:'#172338',border:'1px solid #334155',borderRadius:10,padding:14,marginBottom:12}}>
@@ -3345,6 +3363,12 @@ function PositionForm({initial, onSave, onCancel}) {
               : (qtyFromAmount(parseFloat(f.amount)) ? `= ${+qtyFromAmount(parseFloat(f.amount)).toPrecision(6)} ${(f.ticker || '').toUpperCase()}${f.type === 'futures' ? ` (명목 ${fmtUsd(parseFloat(f.amount) * levN)})` : ''}` : '')}
           </div>
         </div>
+        {f.type === 'futures' && <div style={{flex:'1 1 160px'}}>
+          <span style={lab} title="거래소 포지션 화면의 Margin 값. 수수료·펀딩으로 줄어든 증거금을 넣으면 청산가가 거래소와 맞습니다">거래소 증거금 ($, 선택)</span>
+          <input type="number" value={f.margin} onChange={e => set('margin', e.target.value)} style={inp}
+                 placeholder={(() => { const a = f.mode === 'qty' ? amountFromQty(parseFloat(f.qty)) : parseFloat(f.amount); return a > 0 ? `기본 ${fmtUsd(a)}` : '거래소 Margin'; })()}/>
+          <div style={{fontSize:'.8rem',color:'#94a3b8',marginTop:4}}>거래소 화면의 Margin (청산가 정확도)</div>
+        </div>}
         <div style={{flex:'2 1 180px'}}><span style={lab}>메모 (선택)</span><input value={f.memo} onChange={e => set('memo', e.target.value)} style={inp}/></div>
       </div>
       {err && <div style={{color:'#f87171',fontSize:'.8rem',marginTop:8}}>{err}</div>}
@@ -3353,6 +3377,120 @@ function PositionForm({initial, onSave, onCancel}) {
         {onCancel && <button className="btn-secondary" style={{padding:'7px 16px'}} onClick={onCancel}>취소</button>}
       </div>
     </div>
+  );
+}
+
+// ─── 물타기·증거금 추가 계산기 ───────────────────────────────────────────────
+// 추가 매수: 새 평단 = (기존 수량×평단 + 추가 수량×가격) ÷ 합계 수량, 증거금 += 추가 수량×가격 ÷ 레버리지.
+// 증거금만 추가(격리): 수량·평단 그대로, 증거금만 늘어 청산가가 멀어진다. 수수료는 제외.
+function simulateAdd(p, {mode, addPrice, addQty, addMargin}, mmr = 0.5) {
+  const fut = p.type === 'futures', lev = posLev(p), side = fut && p.side === 'short' ? -1 : 1;
+  const st = (qty, avg, margin) => ({qty, avg, margin, notional: qty * avg, liq: fut ? liqPrice(side, qty, avg, margin, mmr) : null});
+  const q0 = posQty(p), before = st(q0, p.avg, posMargin(p));
+  if (mode === 'margin') {
+    if (!(addMargin > 0)) return null;
+    return {side, fut, lev, before, after: st(q0, p.avg, before.margin + addMargin), cost: addMargin, ref: null};
+  }
+  if (!(addQty > 0) || !(addPrice > 0)) return null;
+  const q1 = q0 + addQty, a1 = (q0 * p.avg + addQty * addPrice) / q1, cost = addQty * addPrice / lev;
+  return {side, fut, lev, before, after: st(q1, a1, before.margin + cost), cost, ref: addPrice};
+}
+
+function AddCalc({p, price, atr, total, cash, stance, onApply}) {
+  const fut = p.type === 'futures', lev = posLev(p), side = fut && p.side === 'short' ? -1 : 1;
+  const [mode, setMode] = React.useState('buy');        // buy | margin
+  const [unit, setUnit] = React.useState('amount');     // amount | qty
+  const [px, setPx] = React.useState(price ? String(+price.toPrecision(8)) : '');
+  const [val, setVal] = React.useState('');
+  React.useEffect(() => { if (!px && price > 0) setPx(String(+price.toPrecision(8))); }, [price]);   // 현재가가 늦게 도착하면 채움
+  if (!(price > 0) || !(p.avg > 0) || !(p.amount > 0)) return null;
+  const addPrice = parseFloat(px), v = parseFloat(val);
+  const addQty = mode === 'buy' ? (unit === 'qty' ? v : (v > 0 && addPrice > 0 ? v * lev / addPrice : NaN)) : 0;
+  const r = simulateAdd(p, {mode, addPrice, addQty, addMargin: v});
+  const stop = atr > 0 ? price - side * TRAIL_MULT * atr : null;     // 보호 손절선 (현재가 ∓ 3 ATR, 일봉)
+  const ref = r?.ref ?? price;                                       // 비교 기준가: 체결가(추가 매수) 또는 현재가
+  const beyondStop = stop != null && mode === 'buy' && (side > 0 ? addPrice <= stop : addPrice >= stop);
+  const pnlAt = (s, x) => side * s.qty * (x - s.avg);
+  const pctTo = (from, to) => to > 0 ? (to / from - 1) * 100 : null;
+  const seg = on => ({height:32,padding:'0 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',fontSize:'.8rem',fontWeight:600,borderRadius:0});
+  const chips = [0, 3, 5, 10];
+  const rows = !r ? [] : [
+    ['수량', s => `${+s.qty.toPrecision(6)}개`],
+    ['평단', s => fmtPx(s.avg, p.ticker), true],
+    [fut ? '증거금' : '투입 금액', s => fmtUsd(s.margin)],
+    ...(fut ? [['명목가 (평단 기준)', s => fmtUsd(s.notional)],
+               ['청산가', s => s.liq ? fmtPx(s.liq, p.ticker) : '없음', true, s => s.liq && stop != null && (side > 0 ? s.liq >= stop : s.liq <= stop) ? '#f87171' : null],
+               ['청산가까지', s => s.liq ? sgnPct(pctTo(ref, s.liq)) : '—']] : []),
+    ['평단 복귀까지', s => sgnPct(pctTo(ref, s.avg))],
+    ['미실현 손익', s => fmtUsd(pnlAt(s, ref)), false, s => pnlCol(pnlAt(s, ref))],
+    ...(stop != null ? [['손절선 도달 시 손익', s => <>{fmtUsd(pnlAt(s, stop))}{total > 0 && <div style={{fontSize:'.76rem',fontWeight:500}}>계좌 {sgnPct(pnlAt(s, stop) / total * 100)}</div>}</>, false, s => pnlCol(pnlAt(s, stop))]] : []),
+  ];
+  const warns = [];
+  if (r) {
+    if (mode === 'buy' && side > 0 && stance && stance !== 'long') warns.push(['warn', `지표 판정이 롱이 아닙니다 (${(STANCE_UI[stance] || {}).label || stance}) — 검증된 규칙에서는 추가 매수 대상이 아닙니다. 물타기는 손절 시 손실을 키웁니다.`]);
+    if (beyondStop) warns.push(['warn', `추가 가격이 보호 손절선(${fmtPx(stop, p.ticker)}) ${side > 0 ? '아래' : '위'}입니다 — 규칙대로라면 그 가격 전에 이미 손절됩니다.`]);
+    if (fut && r.after.liq && stop != null && (side > 0 ? r.after.liq >= stop : r.after.liq <= stop)) warns.push(['danger', '추가 후에도 청산가가 손절선보다 먼저 옵니다.']);
+    if (fut && mode === 'buy' && r.before.liq && r.after.liq && side * (r.after.liq - r.before.liq) > 0) warns.push(['info', `같은 ${lev}배로 추가하면 청산가는 새 평단 쪽으로 따라 ${side > 0 ? '올라' : '내려'}갑니다. 청산가를 멀리하려면 "증거금만 추가"를 비교해 보세요.`]);
+    if (r.cost > (+cash || 0)) warns.push(['info', `필요 금액 ${fmtUsd(r.cost)}이 등록된 현금(${fmtUsd(+cash || 0)})보다 큽니다.`]);
+  }
+  const apply = () => {
+    if (!r || !confirm(`이 계산대로 포지션을 바꿀까요?\n평단 ${fmtN(r.after.avg)} · 수량 ${+r.after.qty.toPrecision(6)}${fut ? ` · 증거금 ${fmtUsd(r.after.margin)}` : ''}\n현금에서 ${fmtUsd(r.cost)}를 뺍니다.`)) return;
+    const amount = r.after.qty * r.after.avg / lev;
+    onApply({...p, avg: r.after.avg, amount, margin: fut && Math.abs(r.after.margin - amount) > 0.005 ? r.after.margin : undefined}, r.cost);
+  };
+  const col = {lv: {danger:'#f87171', warn:'#fbbf24', info:'#93c5fd'}};
+  return (
+    <details style={{marginTop:12,background:'#172338',border:'1px solid #334155',borderRadius:10,padding:'10px 14px'}}>
+      <summary style={{cursor:'pointer',fontWeight:700,fontSize:'.92rem'}}>🧮 {fut ? '물타기·증거금 추가 계산기' : '추가 매수(물타기) 계산기'}</summary>
+      {fut && <div style={{display:'inline-flex',borderRadius:6,overflow:'hidden',marginTop:12}}>
+        <button style={seg(mode==='buy')} onClick={() => setMode('buy')}>추가 매수</button>
+        <button style={seg(mode==='margin')} onClick={() => setMode('margin')}>증거금만 추가</button>
+      </div>}
+      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-start',marginTop:12}}>
+        {mode === 'buy' && <div style={{flex:'1 1 200px'}}>
+          <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:4,height:22,display:'flex',alignItems:'center'}}>추가 가격 ($)</div>
+          <input type="number" value={px} onChange={e => setPx(e.target.value)} style={{height:36}}/>
+          <div style={{display:'flex',gap:4,marginTop:6,flexWrap:'wrap'}}>
+            {chips.map(c => <button key={c} className="btn-secondary" style={{padding:'3px 8px',fontSize:'.76rem'}}
+              onClick={() => setPx(String(+(price * (1 - side * c / 100)).toPrecision(8)))}>{c ? `${side > 0 ? '−' : '+'}${c}%` : '현재가'}</button>)}
+          </div>
+        </div>}
+        <div style={{flex:'1 1 200px'}}>
+          <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:4,height:22,display:'flex',alignItems:'center',gap:6}}>
+            {mode === 'buy' && <span style={{display:'inline-flex',borderRadius:5,overflow:'hidden'}}>
+              <button style={{...seg(unit==='amount'),height:22,padding:'0 8px',fontSize:'.76rem'}} onClick={() => setUnit('amount')}>금액</button>
+              <button style={{...seg(unit==='qty'),height:22,padding:'0 8px',fontSize:'.76rem'}} onClick={() => setUnit('qty')}>수량</button>
+            </span>}
+            {mode === 'margin' ? '추가 증거금 ($)' : unit === 'qty' ? `추가 수량 (${p.ticker})` : `추가 금액 ($)${fut ? ' · 증거금' : ''}`}
+          </div>
+          <input type="number" value={val} onChange={e => setVal(e.target.value)} style={{height:36}} placeholder={mode === 'margin' ? '예: 300' : unit === 'qty' ? '예: 0.05' : '예: 500'}/>
+          <div style={{fontSize:'.78rem',color:'#94a3b8',marginTop:6,minHeight:'1.2em'}}>
+            {mode === 'buy' && addQty > 0 && addPrice > 0 ? (unit === 'qty' ? `= ${fut ? '증거금' : '금액'} ${fmtUsd(addQty * addPrice / lev)}` : `= ${+addQty.toPrecision(6)} ${p.ticker}`) + (fut ? ` · 명목 ${fmtUsd(addQty * addPrice)}` : '') : ''}
+          </div>
+        </div>
+      </div>
+      {r ? <>
+        <div style={{overflowX:'auto',marginTop:6}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:'.84rem'}}>
+            <thead><tr style={{color:'#8794a8',textAlign:'right'}}><th style={{textAlign:'left',padding:'6px 4px',fontWeight:600}}></th><th style={{padding:'6px 4px',fontWeight:600}}>지금</th><th style={{padding:'6px 4px',fontWeight:600,color:'#93c5fd'}}>추가 후</th></tr></thead>
+            <tbody>{rows.map(([label, f, strong, color]) => (
+              <tr key={label} style={{borderTop:'1px solid #1e293b'}}>
+                <td style={{padding:'7px 4px',color:'#94a3b8'}}>{label}</td>
+                {[r.before, r.after].map((s, i) => <td key={i} style={{padding:'7px 4px',textAlign:'right',fontFamily:'monospace',whiteSpace:'nowrap',fontWeight: strong || i ? 700 : 500,color:(color && color(s)) || (i ? '#e2e8f0' : '#cbd5e1')}}>{f(s)}</td>)}
+              </tr>))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{fontSize:'.78rem',color:'#8794a8',marginTop:6}}>
+          {r.ref ? `청산가까지·평단 복귀·손익은 체결가 ${fmtPx(ref, p.ticker)} 기준` : '청산가까지·평단 복귀·손익은 현재가 기준'}{stop != null ? ` · 손절선 ${fmtPx(stop, p.ticker)} (현재가 ${side > 0 ? '−' : '+'} 3 ATR, 일봉)` : ''}
+        </div>
+        {warns.map(([lv, t], i) => <div key={i} style={{fontSize:'.82rem',lineHeight:1.6,color:col.lv[lv],marginTop:6}}>{lv === 'danger' ? '⛔' : lv === 'warn' ? '⚠️' : '💡'} {t}</div>)}
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
+          <button className="btn-secondary" style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={apply}>체결됐으면 포지션에 반영</button>
+          <span style={{fontSize:'.78rem',color:'#8794a8'}}>필요 금액 {fmtUsd(r.cost)} · 수수료 제외 · 청산가는 격리·유지증거금률 0.5% 기준</span>
+        </div>
+      </> : <div style={{fontSize:'.82rem',color:'#8794a8',marginTop:4}}>{mode === 'margin' ? '추가할 증거금을 넣으면 청산가 변화를 계산합니다.' : '가격과 금액(또는 수량)을 넣으면 새 평단·청산가·손절 시 손익을 계산합니다.'}</div>}
+    </details>
   );
 }
 
@@ -3406,6 +3544,7 @@ function MyPositionsTab({onAnalyze}) {
     </div>
   );
   const save = pos => { update(a => ({...a, positions: a.positions.some(x => x.id === pos.id) ? a.positions.map(x => x.id === pos.id ? pos : x) : [...a.positions, pos]})); setEditing(null); setOpen(pos.id); };
+  const applyAdd = (pos, cost) => update(a => ({...a, cash: Math.max(0, (+a.cash || 0) - cost), positions: a.positions.map(x => x.id === pos.id ? pos : x)}));
   const remove = id => { if (confirm('이 포지션을 삭제할까요?')) update(a => ({...a, positions: a.positions.filter(x => x.id !== id)})); };
 
   return (
@@ -3451,7 +3590,7 @@ function MyPositionsTab({onAnalyze}) {
               <div className="pos-row" onClick={() => setOpen(isOpen ? null : p.id)}>
                 <div>
                   <div style={{fontWeight:800,fontSize:'1rem'}}>{p.ticker} <span className={`badge ${p.type === 'futures' ? (p.side === 'short' ? 'badge-red' : 'badge-green') : 'badge-gray'}`} style={{fontSize:'.8rem'}}>{p.type === 'futures' ? `선물 ${p.side === 'short' ? '숏' : '롱'} ${p.lev}x` : '현물'}</span></div>
-                  <div style={{fontSize:'.8rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {p.amount && p.avg ? `${+(p.amount * (p.type === 'futures' ? (+p.lev || 1) : 1) / p.avg).toPrecision(5)}개` : ''} · 투입 {fmtUsd(p.amount)}</div>
+                  <div style={{fontSize:'.8rem',color:'#8794a8'}}>평단 {fmtPx(p.avg, p.ticker)} · {p.amount && p.avg ? `${+(p.amount * (p.type === 'futures' ? (+p.lev || 1) : 1) / p.avg).toPrecision(5)}개` : ''} · 투입 {fmtUsd(p.amount)}{p.type === 'futures' && p.margin > 0 ? ` · 증거금 ${fmtUsd(p.margin)}` : ''}</div>
                 </div>
                 <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>현재가</div><div style={{fontFamily:'monospace',fontWeight:700}}>{v ? fmtPx(priceOf(p.ticker), p.ticker) : (a?.error ? '조회 실패' : '…')}</div></div>
                 <div><div style={{fontSize:'.8rem',color:'#8794a8'}}>손익</div><div style={{fontWeight:800,color: v ? pnlCol(v.pnlPct) : '#8794a8'}}>{v ? sgnPct(v.pnlPct) : '—'}</div><div style={{fontSize:'.8rem',color: v ? pnlCol(v.pnl) : '#8794a8'}}>{v ? fmtUsd(v.pnl) : ''}</div></div>
@@ -3472,6 +3611,7 @@ function MyPositionsTab({onAnalyze}) {
                     </div>}
                     {a?.error && <div className="alert-box alert-err" style={{fontSize:'.8rem'}}>판정을 불러오지 못했습니다: {a.error}</div>}
                     {adv ? <AdviceView adv={adv} ticker={p.ticker} amount={p.amount} stance={stance} deriv={a?.deriv}/> : !a?.error && <div style={{color:'#8794a8',fontSize:'.82rem'}}>계산 중...</div>}
+                    <AddCalc p={p} price={priceOf(p.ticker)} atr={a?.p1?.computed?.atr} total={T.total} cash={acc.cash} stance={stance} onApply={applyAdd}/>
                     <div style={{display:'flex',gap:8,marginTop:12,flexWrap:'wrap'}}>
                       <button className="btn-primary" style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={() => onAnalyze && onAnalyze(p.ticker)}>📊 분석 탭에서 자세히</button>
                       <button className="btn-secondary" style={{padding:'6px 14px',fontSize:'.8rem'}} onClick={() => setEditing(p.id)}>수정</button>
@@ -3527,6 +3667,8 @@ function TickerPositions({report, onOpenPositions}) {
               {T.total > 0 && v && <> · 비중 {(v.equity / T.total * 100).toFixed(1)}% (평가 {fmtUsd(v.equity)})</>}
             </div>
             <AdviceView adv={adv} ticker={ticker} amount={p.amount} stance={stanceOf(report)} deriv={deriv.data}/>
+            <AddCalc p={p} price={report.price} atr={report.computed.atr} total={T.total} cash={acc.cash} stance={stanceOf(report)}
+                     onApply={(pos, cost) => update(a => ({...a, cash: Math.max(0, (+a.cash || 0) - cost), positions: a.positions.map(x => x.id === pos.id ? pos : x)}))}/>
           </div>
         );
       })}
