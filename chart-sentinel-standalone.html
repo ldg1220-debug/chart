@@ -1296,6 +1296,106 @@ function summarizeBacktest(samples, step, fee = 0) {
   };
 }
 
+// ─── 분석 관점: 엘리엇 파동 후보 (기계적 카운트) ─────────────────────────────
+// 지그재그(되돌림 r 이상)로 고점·저점을 잡고, 충격파 3대 규칙을 통과하는 가장 긴 최근 카운트를 찾는다.
+// 규칙: ① 2파는 1파 시작점을 넘어 되돌리지 않는다 ② 3파는 1·3·5파 중 가장 짧지 않다 ③ 4파는 1파 가격대와 겹치지 않는다.
+// 같은 차트에도 여러 카운트가 가능한 주관적 기법이라, 규칙만 확인한 후보와 무효화 가격을 함께 낸다.
+function zigzagPivots(ohlcv, r) {
+  const piv = [];
+  let mode = 0, hi = {i:0, p:ohlcv[0].high}, lo = {i:0, p:ohlcv[0].low};
+  for (let i = 1; i < ohlcv.length; i++) {
+    const H = ohlcv[i].high, L = ohlcv[i].low;
+    if (mode === 0) {
+      if (H > hi.p) hi = {i, p:H};
+      if (L < lo.p) lo = {i, p:L};
+      if (hi.i > lo.i && hi.p >= lo.p * (1 + r)) { piv.push({...lo, t:'L'}); mode = 1; }
+      else if (lo.i > hi.i && lo.p <= hi.p * (1 - r)) { piv.push({...hi, t:'H'}); mode = -1; }
+    } else if (mode === 1) {
+      if (H > hi.p) hi = {i, p:H};
+      else if (L <= hi.p * (1 - r)) { piv.push({...hi, t:'H'}); mode = -1; lo = {i, p:L}; }
+    } else {
+      if (L < lo.p) lo = {i, p:L};
+      else if (H >= lo.p * (1 + r)) { piv.push({...lo, t:'L'}); mode = 1; hi = {i, p:H}; }
+    }
+  }
+  if (mode === 1) piv.push({...hi, t:'H', open:true});        // 아직 확정되지 않은 진행 중 극점
+  else if (mode === -1) piv.push({...lo, t:'L', open:true});
+  return piv;
+}
+
+function elliottCount(ohlcv, atrPct, price) {
+  if (!ohlcv || ohlcv.length < 30) return {ok:false, pts:[], r:null};
+  const r = Math.min(0.3, Math.max(0.04, 3.5 * atrPct / 100));   // 지그재그 민감도: ATR의 3.5배 되돌림
+  const pts = zigzagPivots(ohlcv, r);
+  // 5파가 끝난 뒤 반대 방향으로 진행 중이면 → 조정(ABC) 후보
+  if (pts.length >= 7) {
+    const seq = pts.slice(-7), dir = seq[0].t === 'L' ? 1 : -1, v = k => seq[k].p * dir, len = k => v(k) - v(k - 1);
+    const impulseOk = v(2) > v(0) && v(3) > v(1) && v(4) > v(1) && !(len(3) < len(1) && len(3) < len(5)) && v(5) > v(3);
+    if (impulseOk && seq[6].open && price * dir < v(5)) {
+      const back = x => x * dir, all = v(5) - v(0);
+      return {ok:true, r, pts, s: pts.length - 7, dir, n: 6, seq: seq.map((p, k) => ({...p, wave: k < 6 ? k : 'A'})), corrective: true,
+        status: '5파 완성 후 조정(ABC) 진행 중', invalid: seq[5].p, invalidLabel: `5파 ${dir > 0 ? '고점' : '저점'}(넘으면 5파 연장)`,
+        ratios: {w2: (v(1) - v(2)) / len(1), w3: len(3) / len(1), w4: (v(3) - v(4)) / len(3)},
+        targets: [{label:`4파 ${dir > 0 ? '저점' : '고점'} 부근 (흔한 조정 목표)`, price: seq[4].p}, {label:`전체 ${dir > 0 ? '상승' : '하락'}의 38.2% 되돌림`, price: back(v(5) - 0.382 * all)},
+                  {label:`전체 ${dir > 0 ? '상승' : '하락'}의 61.8% 되돌림`, price: back(v(5) - 0.618 * all)}]};
+    }
+  }
+  for (let s = Math.max(0, pts.length - 6); s <= pts.length - 3; s++) {   // 파동 수가 많은(긴) 카운트부터
+    const seq = pts.slice(s), n = seq.length - 1;
+    const dir = seq[0].t === 'L' ? 1 : -1;               // 저점에서 시작하면 상승 충격파
+    const v = k => seq[k].p * dir;                        // 하락 충격파는 부호를 뒤집어 같은 규칙으로 검사
+    const len = k => v(k) - v(k - 1);
+    const done = k => n > k || !seq[n].open;              // 진행 중인 마지막 파동은 길이·돌파 조건을 아직 따지지 않는다
+    if (n >= 2 && !(v(2) > v(0))) continue;               // ① 2파가 1파 시작점 이탈
+    if (n >= 3 && done(3) && !(v(3) > v(1))) continue;    // 3파가 1파 끝을 넘지 못함
+    if (n >= 4 && !(v(4) > v(1))) continue;               // ③ 4파가 1파 가격대와 겹침
+    if (n >= 5 && done(5) && len(3) < len(1) && len(3) < len(5)) continue;   // ② 3파가 가장 짧음
+    if (n >= 5 && done(5) && !(v(5) > v(3))) continue;    // 5파가 3파 끝을 넘지 못함(절단형은 제외)
+    if (n >= 5 && !done(5) && len(3) < len(1)) continue;  // 5파 진행 중이면 3파는 최소한 1파보다 길어야 함
+    // 지금 가격이 무효화선을 이미 넘었으면 버린다
+    const invalidK = n === 2 ? 0 : n === 3 ? 2 : n === 4 ? 1 : 4;
+    const invalid = seq[invalidK].p;
+    if (price * dir <= invalid * dir) continue;
+    const back = x => x * dir, L1 = len(1);
+    const targets = [];
+    let status;
+    if (n === 2) { status = '2파 조정 진행 중';
+      targets.push({label:'2파 흔한 되돌림 50%', price: back(v(1) - 0.5 * L1)}, {label:'2파 되돌림 61.8%', price: back(v(1) - 0.618 * L1)},
+                   {label:'이후 3파 목표 (1파 × 1.618)', price: back(v(2) + 1.618 * L1)}); }
+    else if (n === 3) { status = '3파 진행 중';
+      targets.push({label:'3파 목표 (1파 × 1.618)', price: back(v(2) + 1.618 * L1)}, {label:'3파 확장 (1파 × 2.618)', price: back(v(2) + 2.618 * L1)}); }
+    else if (n === 4) { status = '4파 조정 진행 중'; const L3 = len(3);
+      targets.push({label:'4파 흔한 되돌림 (3파의 38.2%)', price: back(v(3) - 0.382 * L3)}, {label:'4파 되돌림 50%', price: back(v(3) - 0.5 * L3)}); }
+    else { status = '5파 진행 중 (마무리 단계 후보)';
+      targets.push({label:'5파 = 1파 길이', price: back(v(4) + L1)}, {label:'5파 = (0~3파) × 0.618', price: back(v(4) + 0.618 * (v(3) - v(0)))}); }
+    return {ok:true, r, pts, s, dir, n, seq: seq.map((p, k) => ({...p, wave:k})), status, invalid, invalidLabel:
+      n === 2 ? '1파 시작점' : n === 3 ? `2파 ${dir > 0 ? '저점' : '고점'}` : n === 4 ? `1파 ${dir > 0 ? '고점' : '저점'}(겹침 금지)` : `4파 ${dir > 0 ? '저점' : '고점'}`,
+      ratios: {w2: n >= 2 ? (v(1) - v(2)) / L1 : null, w3: n >= 3 ? len(3) / L1 : null, w4: n >= 4 ? (v(3) - v(4)) / len(3) : null}, targets};
+  }
+  return {ok:false, pts, r};
+}
+
+// ─── 분석 관점: BTC 반감기 사이클 ────────────────────────────────────────────
+// 과거 3번의 사이클 고점·저점(일봉 기준 날짜)과 반감기 후 경과일. 표본이 3개뿐이라 참고용.
+const HALVINGS = ['2012-11-28', '2016-07-09', '2020-05-11', '2024-04-20'];
+const CYCLE_HISTORY = [
+  {halving:'2012-11-28', top:'2013-12-04', bottom:'2015-01-14'},
+  {halving:'2016-07-09', top:'2017-12-17', bottom:'2018-12-15'},
+  {halving:'2020-05-11', top:'2021-11-10', bottom:'2022-11-21'},
+];
+const _days = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+function halvingCycle(nowMs) {
+  const now = new Date(nowMs).toISOString().slice(0, 10);
+  const last = HALVINGS.filter(h => h <= now).pop();
+  const past = CYCLE_HISTORY.map(c => ({...c, topDays: _days(c.halving, c.top), bottomDays: _days(c.halving, c.bottom)}));
+  const day = _days(last, now);
+  const tops = past.map(c => c.topDays), bottoms = past.map(c => c.bottomDays);
+  const [t0, t1, b0, b1] = [Math.min(...tops), Math.max(...tops), Math.min(...bottoms), Math.max(...bottoms)];
+  const phase = day < t0 ? '반감기 후 상승 구간 (과거 고점 이전)' : day <= t1 ? '과거 사이클 고점이 나온 구간'
+    : day < b0 ? '과거 고점 이후 하락 구간' : day <= b1 ? '과거 사이클 바닥이 나온 구간' : '과거 바닥 이후 회복 구간';
+  return {lastHalving: last, day, past, topWin: [t0, t1], bottomWin: [b0, b1], phase, nextHalving: '2028-04 (추정)'};
+}
+
 function buildLocalReport(p1) {
   const c = p1.computed, P = TF_PRESETS[p1.tfId] || TF_PRESETS['1d'];
   const tf = TIMEFRAMES.find(t=>t.id===p1.tfId);
@@ -1308,6 +1408,7 @@ function buildLocalReport(p1) {
     resistance: c.levels.resistances[0]?.price ?? null,
     target_price: null, stop_loss: c.tradePlan.stopLoss,
     risk_level: c.riskLevel, time_horizon: P.horizon, setup_type: P.setup, market: p1.type, rs: p1.rs || null, _local: true,
+    candles: p1.candles,   // 분석 관점(피보·엘리엇·RSI 등) 카드에서 사용
   };
 }
 
@@ -2964,6 +3065,312 @@ function MacroMicroCard({report}) {
   );
 }
 
+// ─── 🧭 분석 관점 선택 (이평선 · RSI·MACD · 피보나치 · 엘리엇 · 사이클·거시) ───────────
+// 같은 캔들을 관점별로 따로 읽어 보여준다. 판정(롱/관망/회피)은 종합 점수로만 내며,
+// 개별 관점의 해석은 과거 검증을 거치지 않은 참고용이다.
+const LENSES = [
+  {id:'total', label:'종합 판정', icon:'⚖️'},
+  {id:'ma',    label:'이평선',    icon:'〰️'},
+  {id:'mom',   label:'RSI·MACD', icon:'📶'},
+  {id:'fib',   label:'피보나치',  icon:'📐'},
+  {id:'ew',    label:'엘리엇 파동', icon:'🌊'},
+  {id:'cycle', label:'사이클·거시', icon:'🌐'},
+];
+const MACRO_TICKERS = [
+  {t:'^IXIC',    label:'나스닥',        note:'위험자산 선호'},
+  {t:'DX-Y.NYB', label:'달러 인덱스',    note:'달러 강약'},
+  {t:'^TNX',     label:'미 10년물 금리', note:'금리 (%)'},
+  {t:'GC=F',     label:'금',            note:'안전자산'},
+];
+let _macroHit = null;   // 10분 캐시
+async function fetchMacroLens() {
+  if (_macroHit && Date.now() - _macroHit.ts < 600000) return _macroHit.p;
+  const p = (async () => {
+    const [btcD, btcW] = await Promise.all([
+      fetchOHLCV('BTC', '1y', 'crypto'),
+      fetchOHLCVForTimeframe('BTC', TIMEFRAMES.find(t => t.id === '1w'), 'crypto').catch(() => null),
+    ]);
+    const key = d => String(d.date || '').slice(0, 10);
+    const btcMap = new Map(btcD.map(d => [key(d), d.close]));
+    const ext = await Promise.all(MACRO_TICKERS.map(async m => {
+      try {
+        const d = (await fetchYahooOHLCV(m.t, '6mo', '1d')).filter(x => x.close != null);
+        if (d.length < 30) throw new Error('데이터 부족');
+        const cl = d.map(x => x.close), last = cl[cl.length - 1];
+        const ma50 = cl.length >= 50 ? cl.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
+        // BTC와 일간 수익률 상관 (공통 거래일, 최근 90일)
+        const common = d.filter(x => btcMap.has(key(x))).slice(-91);
+        let corr = null;
+        if (common.length > 40) {
+          const ra = [], rb = [];
+          for (let i = 1; i < common.length; i++) { ra.push(common[i].close / common[i-1].close - 1); rb.push(btcMap.get(key(common[i])) / btcMap.get(key(common[i-1])) - 1); }
+          const ma = _avg(ra), mb = _avg(rb);
+          let sab = 0, saa = 0, sbb = 0; ra.forEach((x, i) => { sab += (x-ma)*(rb[i]-mb); saa += (x-ma)**2; sbb += (rb[i]-mb)**2; });
+          corr = saa > 0 && sbb > 0 ? sab / Math.sqrt(saa * sbb) : null;
+        }
+        return {...m, last, chg1m: cl.length > 21 ? last / cl[cl.length - 22] - 1 : null, chg3m: cl.length > 63 ? last / cl[cl.length - 64] - 1 : null, aboveMa50: ma50 ? last > ma50 : null, corr};
+      } catch (e) { return {...m, error: e.message}; }
+    }));
+    let cyc = null;
+    if (btcW && btcW.length > 20) {
+      const cyc0 = halvingCycle(Date.now());
+      const since = btcW.filter(b => String(b.date).slice(0, 10) >= cyc0.lastHalving);
+      const top = since.reduce((m, b) => b.high > m.high ? b : m, since[0]);
+      const closesW = btcW.slice(0, -1).map(b => b.close), nW = Math.min(200, closesW.length);
+      const ma200w = closesW.slice(-nW).reduce((a, b) => a + b, 0) / nW;
+      const px = btcD[btcD.length - 1].close;
+      cyc = {...cyc0, cycleTop: top ? {price: top.high, date: String(top.date).slice(0, 10), days: _days(cyc0.lastHalving, String(top.date).slice(0, 10))} : null,
+             dd: top ? px / top.high - 1 : null, ma200w, ma200wN: nW, btc: px};
+    }
+    return {ext, cyc};
+  })();
+  _macroHit = {ts: Date.now(), p};
+  p.catch(() => { _macroHit = null; });
+  return p;
+}
+
+function LensCard({report}) {
+  const [lens, setLens] = React.useState(() => ls_get('cs_lens', 'ma'));
+  const [macro, setMacro] = React.useState({loading: false, data: null, error: ''});
+  const c = report?.computed, candles = report?.candles, price = report?.price, T = report?.ticker;
+  const isCrypto = report?.market === 'crypto';
+  const ew = React.useMemo(() => c && candles ? elliottCount(candles, c.atrPct, price) : null, [candles, price]);
+  React.useEffect(() => {
+    if (lens !== 'cycle' || !isCrypto || macro.data || macro.loading) return;
+    setMacro({loading: true, data: null, error: ''});
+    fetchMacroLens().then(d => setMacro({loading: false, data: d, error: ''})).catch(e => setMacro({loading: false, data: null, error: e.message}));
+  }, [lens]);
+  if (!c || !candles) return null;
+  const pick = id => { setLens(id); ls_set('cs_lens', id); };
+  const comp = k => (c.scoreBreakdown || []).find(x => x.key === k);
+  const P = TF_PRESETS[report.tfId] || TF_PRESETS['1d'];
+  const closes = candles.map(x => x.close);
+
+  // ── 관점별 한 줄 판독 (상승 1 / 중립 0 / 하락 −1)
+  const maScore = ((comp('ma')?.contrib || 0) + (comp('slope')?.contrib || 0)) * 2.5;
+  const momScore = ((comp('rsi')?.contrib || 0) + (comp('macd')?.contrib || 0)) * 4;
+  const fibPos = (() => {     // 스윙 대비 현재 위치: 0 = 스윙 끝(고점/저점), 1 = 스윙 시작
+    const {high, low} = c.fib90 || {}; if (!(high > low)) return null;
+    return c.fibDir === 'up' ? (high - price) / (high - low) : (price - low) / (high - low);
+  })();
+  const fibDir = fibPos == null ? null : (c.fibDir === 'up' ? (fibPos <= 0.382 ? 1 : fibPos <= 0.618 ? 0 : -1) : (fibPos <= 0.382 ? -1 : fibPos <= 0.618 ? 0 : 1));
+  const ewDir = ew?.ok ? (ew.corrective ? -ew.dir : [1, 3, 5].includes(ew.n) ? ew.dir : 0) : null;
+  const st = STANCE_UI[c.verdict.stance] || STANCE_UI.neutral;
+  const readings = {
+    total: {text: st.label, color: st.color},
+    ma:    {dir: mmDir(maScore)}, mom: {dir: mmDir(momScore)}, fib: {dir: fibDir},
+    ew:    {dir: ewDir, text: ew?.ok ? `${ew.dir > 0 ? '상승' : '하락'} ${ew.corrective ? 'ABC' : ew.n + '파'}` : '카운트 없음'},
+    cycle: {text: isCrypto ? '반감기 ' + halvingCycle(Date.now()).day + '일' : '코인 전용'},
+  };
+  const readUi = id => { const r = readings[id]; if (r.text && r.dir == null) return {label: r.text, color: r.color || '#cbd5e1'};
+    const u = r.dir != null ? MM_DIR_UI[r.dir] : null; return {label: r.text || (u ? u.label : '—'), color: u ? u.color : '#8794a8'}; };
+
+  const Box = ({label, value, sub, color}) => (
+    <div style={{flex:'1 1 140px',minWidth:0,background:'#172338',border:'1px solid #1e293b',borderRadius:8,padding:'9px 12px'}}>
+      <div style={{fontSize:'.78rem',color:'#8794a8',marginBottom:2}}>{label}</div>
+      <div style={{fontSize:'.98rem',fontWeight:800,color:color||'#e2e8f0',fontFamily:'monospace'}}>{value}</div>
+      {sub && <div style={{fontSize:'.76rem',color:'#8794a8',marginTop:2,lineHeight:1.5}}>{sub}</div>}
+    </div>
+  );
+  const Headline = ({id, children}) => { const u = readUi(id); return (
+    <div style={{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap',margin:'4px 0 12px'}}>
+      <span style={{fontSize:'1.1rem',fontWeight:900,color:u.color}}>{u.label}</span>
+      <span style={{fontSize:'.86rem',color:'#cbd5e1',lineHeight:1.6}}>{children}</span>
+    </div>); };
+  const Limit = ({children}) => <div style={{fontSize:'.78rem',color:'#8794a8',lineHeight:1.6,marginTop:10,paddingTop:8,borderTop:'1px dashed #1e293b'}}>⚠️ 이 관점의 한계: {children}</div>;
+  const fact = re => (c.facts || []).find(f => re.test(f));
+  const pctTo = v => v ? sgnPct((v / price - 1) * 100) : '—';
+  const px = v => fmtPx(v, T);
+
+  // 미니 차트: 최근 N봉 종가 + 선택적 오버레이
+  const Spark = ({n = 120, lines: linesIn = [], marks = [], h = 150, zig = null}) => {
+    let lines = linesIn;
+    const W = Math.round(Math.min(600, Math.max(320, (window.innerWidth || 600) - 70))), s0 = Math.max(0, closes.length - n), seg = candles.slice(s0);   // 화면 폭으로 그려 모바일에서도 글자 크기 유지
+    const curves = lines.filter(l => l.series).map(l => ({...l, pts: l.series.slice(s0)}));   // 이평선처럼 시간에 따라 변하는 선
+    lines = lines.filter(l => !l.series);
+    const vals = seg.flatMap(b => [b.high, b.low]).concat(lines.map(l => l.v).filter(v => v != null), zig ? zig.map(z => z.p) : [], curves.flatMap(cv => cv.pts.filter(v => v != null)));
+    const padY = zig ? 20 : 6;   // 파동 번호가 위아래로 잘리지 않게
+    const hi = Math.max(...vals), lo = Math.min(...vals), y = v => h - padY - (v - lo) / ((hi - lo) || 1) * (h - 2 * padY), x = i => 8 + (i - s0) / Math.max(1, seg.length - 1) * (W - 86);
+    return (
+      <svg viewBox={`0 0 ${W} ${h}`} style={{width:'100%',height:'auto',display:'block',background:'#0b1220',borderRadius:8,border:'1px solid #1e293b'}}>
+        {lines.filter(l => l.v != null && l.v >= lo && l.v <= hi).map((l, k) => <g key={k}>
+          <line x1="0" x2={W - 70} y1={y(l.v)} y2={y(l.v)} stroke={l.color} strokeWidth="1" strokeDasharray="4,3" opacity=".8"/>
+          <text x={W - 66} y={y(l.v) + 4} fill={l.color} fontSize="11" fontWeight="700">{l.label}</text></g>)}
+        <polyline points={seg.map((b, i) => `${x(s0 + i).toFixed(1)},${y(b.close).toFixed(1)}`).join(' ')} fill="none" stroke="#94a3b8" strokeWidth="1.4"/>
+        {curves.map((cv, k) => { const pts = cv.pts.map((v, i) => v == null ? null : `${x(s0 + i).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean), lastV = cv.pts[cv.pts.length - 1];
+          return <g key={'c' + k}><polyline points={pts.join(' ')} fill="none" stroke={cv.color} strokeWidth="1.6" opacity=".9"/>
+            {lastV != null && <text x={W - 74} y={y(lastV) + 4} fill={cv.color} fontSize="11" fontWeight="700">{cv.label}</text>}</g>; })}
+        {zig && <polyline points={zig.map(z => `${x(z.i).toFixed(1)},${y(z.p).toFixed(1)}`).join(' ')} fill="none" stroke="#60a5fa" strokeWidth="2"/>}
+        {zig && zig.map((z, k) => <g key={k}><circle cx={x(z.i)} cy={y(z.p)} r="3.5" fill="#60a5fa"/>
+          <text x={x(z.i)} y={y(z.p) + (z.t === 'H' ? -8 : 16)} fill="#e2e8f0" fontSize="13" fontWeight="800" textAnchor="middle">{z.wave}</text></g>)}
+        {marks.map((m, k) => <circle key={k} cx={x(m.i)} cy={y(m.v)} r="4" fill={m.color}/>)}
+        <circle cx={x(closes.length - 1)} cy={y(price)} r="4" fill="#fbbf24"/>
+      </svg>
+    );
+  };
+
+  const body = (() => {
+    if (lens === 'total') return <>
+      <Headline id="total">7개 지표 점수 합계 {c.score > 0 ? '+' : ''}{c.score} — 앱의 매매 판단은 이 종합 판정만 사용합니다.</Headline>
+      {(c.scoreBreakdown || []).map(x => (
+        <div key={x.key} style={{display:'grid',gridTemplateColumns:'130px 1fr 54px',gap:8,alignItems:'center',padding:'4px 0',fontSize:'.84rem'}}>
+          <span style={{color:'#94a3b8'}}>{x.label}</span><ScoreBar score={x.contrib / x.weight * 100}/>
+          <span style={{fontFamily:'monospace',fontWeight:700,textAlign:'right',color: x.contrib > 0 ? '#4ade80' : x.contrib < 0 ? '#f87171' : '#94a3b8'}}>{x.contrib > 0 ? '+' : ''}{x.contrib.toFixed(1)}</span>
+        </div>))}
+      <div style={{fontSize:'.8rem',color:'#8794a8',marginTop:8,lineHeight:1.6}}>막대 = 각 지표의 방향(−100 ~ +100), 오른쪽 숫자 = 종합 점수에 기여한 점수. 아래 관점 버튼으로 각 기법만 따로 볼 수 있습니다.</div>
+    </>;
+    if (lens === 'ma') {
+      const sets = [...c.maSet.filter(m => m.v != null)];
+      if (report.tfId === '1d' && c.ma.ma200 && !sets.some(m => m.n === 200)) sets.push({n:200, v:c.ma.ma200});
+      const asc = sets.every((m, i) => i === 0 || sets[i-1].v > m.v), desc = sets.every((m, i) => i === 0 || sets[i-1].v < m.v);
+      const cols = ['#fbbf24', '#60a5fa', '#a78bfa', '#ec4899'];
+      return <>
+        <Headline id="ma">{asc ? '정배열 (단기 > 중기 > 장기) — 상승 추세 구조' : desc ? '역배열 (단기 < 중기 < 장기) — 하락 추세 구조' : '배열 혼조 — 추세 전환 중이거나 횡보'} · 가격은 {sets.filter(m => price >= m.v).length}/{sets.length}개 이평선 위</Headline>
+        <Spark n={160} lines={sets.map((m, k) => ({series: movingAverage(closes, m.n), color: cols[k % 4], label: 'MA' + m.n}))}/>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:10}}>
+          {sets.map((m, k) => <Box key={m.n} label={`MA${m.n}`} value={px(m.v)} color={cols[k % 4]} sub={`현재가가 ${price >= m.v ? '위' : '아래'} (${sgnPct((price / m.v - 1) * 100)})`}/>)}
+          <Box label="추세 기울기" value={comp('slope')?.note || '—'} sub={`MA${P.ma[0]} 10봉 변화 기준`}/>
+        </div>
+        <div style={{fontSize:'.84rem',color:'#cbd5e1',marginTop:10}}>📌 {fact(/크로스/) || `최근 40봉 안에 MA${P.ma[0]}·MA${P.ma[1]} 교차 없음`}</div>
+        <Limit>이평선은 과거 가격의 평균이라 추세 전환을 늦게 알려줍니다. 횡보장에서는 교차 신호가 자주 엇갈립니다.</Limit>
+      </>;
+    }
+    if (lens === 'mom') {
+      const rs = rsi(closes, c.rsiPeriod || 14), ms = macdSeries(closes), N = 60, s0 = closes.length - N;
+      const hist = ms.hist.slice(s0), hMax = Math.max(...hist.map(v => Math.abs(v || 0)), 1e-9);
+      const r = c.rsi14;
+      return <>
+        <Headline id="mom">RSI {r?.toFixed(0)} ({comp('rsi')?.note?.replace(/^RSI \d+ /, '')}) · {comp('macd')?.note}</Headline>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:10}}>
+          <div style={{background:'#0b1220',border:'1px solid #1e293b',borderRadius:8,padding:10}}>
+            <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:6}}>RSI({c.rsiPeriod || 14}) 최근 {N}봉 — 70 이상 과열, 30 이하 과매도</div>
+            <svg viewBox="0 0 300 100" style={{width:'100%',display:'block'}}>
+              <rect x="0" y="0" width="300" height="30" fill="#450a0a" opacity=".35"/><rect x="0" y="70" width="300" height="30" fill="#0c4a6e" opacity=".35"/>
+              <polyline points={rs.slice(s0).map((v, i) => v == null ? '' : `${(i / (N - 1) * 300).toFixed(1)},${(100 - v).toFixed(1)}`).join(' ')} fill="none" stroke="#a78bfa" strokeWidth="1.8"/>
+              <text x="296" y="26" fill="#f87171" fontSize="10" textAnchor="end">70</text><text x="296" y="96" fill="#60a5fa" fontSize="10" textAnchor="end">30</text>
+            </svg>
+          </div>
+          <div style={{background:'#0b1220',border:'1px solid #1e293b',borderRadius:8,padding:10}}>
+            <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:6}}>MACD 히스토그램 최근 {N}봉 — 0 위면 상승 모멘텀</div>
+            <svg viewBox="0 0 300 100" style={{width:'100%',display:'block'}}>
+              <line x1="0" x2="300" y1="50" y2="50" stroke="#475569"/>
+              {hist.map((v, i) => v == null ? null : <rect key={i} x={i * 300 / N + 0.5} width={300 / N - 1} y={v >= 0 ? 50 - v / hMax * 46 : 50} height={Math.abs(v) / hMax * 46} fill={v >= 0 ? '#4ade80' : '#f87171'} opacity={i === N - 1 ? 1 : .7}/>)}
+            </svg>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:10}}>
+          <Box label="RSI" value={r?.toFixed(1)} color={r >= 70 ? '#fb923c' : r <= 30 ? '#60a5fa' : '#e2e8f0'} sub={r >= 70 ? '과열권' : r <= 30 ? '과매도권' : r >= 55 ? '강세 구간' : r <= 45 ? '약세 구간' : '중립'}/>
+          <Box label="MACD / 시그널" value={`${fmtN(c.macd.macd)} / ${fmtN(c.macd.signal)}`} sub={c.macd.macd >= 0 ? '0선 위' : '0선 아래'}/>
+          <Box label="히스토그램" value={fmtN(c.macd.hist)} color={c.macd.hist >= 0 ? '#4ade80' : '#f87171'} sub={c.macd.hist >= 0 ? 'MACD > 시그널' : 'MACD < 시그널'}/>
+        </div>
+        <div style={{fontSize:'.84rem',color:'#cbd5e1',marginTop:10,lineHeight:1.7}}>📌 {fact(/MACD 시그널/) || '최근 5봉 안에 MACD 시그널 교차 없음'}<br/>📌 {fact(/다이버전스/)}</div>
+        <Limit>강한 추세에서는 RSI 과열·과매도가 오래 지속돼 역추세 신호가 자주 틀립니다. 다이버전스도 실패가 흔합니다.</Limit>
+      </>;
+    }
+    if (lens === 'fib') {
+      const {high, low} = c.fib90 || {};
+      const lv = [...(c.fibs || []).map(f => ({...f, kind:'되돌림'})), ...(c.fibExts || []).slice(0, 3).map(f => ({...f, kind:'확장'}))];
+      const below = lv.filter(f => f.price < price).sort((a, b) => b.price - a.price)[0], above = lv.filter(f => f.price > price).sort((a, b) => a.price - b.price)[0];
+      const ladder = [{label: c.fibDir === 'up' ? '스윙 고점' : '스윙 저점', price: c.fibDir === 'up' ? high : low, kind:'기준'}, {label: c.fibDir === 'up' ? '스윙 저점' : '스윙 고점', price: c.fibDir === 'up' ? low : high, kind:'기준'},
+        ...lv.map(f => ({label: `${f.kind} ${f.level}`, price: f.price, kind: f.kind})), {label:'현재가', price, kind:'now'}].sort((a, b) => b.price - a.price);
+      return <>
+        <Headline id="fib">최근 {c.swingBars}봉 {c.fibDir === 'up' ? `상승 스윙(${px(low)} → ${px(high)})` : `하락 스윙(${px(high)} → ${px(low)})`}의 {fibPos != null ? (fibPos * 100).toFixed(0) : '—'}% 되돌림 위치 — {fibPos == null ? '' : c.fibDir === 'up'
+          ? (fibPos <= 0.382 ? '얕은 조정, 상승 추세 유지 구간' : fibPos <= 0.618 ? '정상적인 조정 범위 (38.2~61.8%)' : '깊은 되돌림, 상승 추세 훼손 가능성')
+          : (fibPos <= 0.382 ? '반등이 약함, 하락 추세 유지 구간' : fibPos <= 0.618 ? '정상적인 반등 범위 (38.2~61.8%)' : '깊은 반등, 하락 추세 약화 가능성')}</Headline>
+        <Spark n={c.swingBars || 90} lines={(c.fibs || []).map(f => ({v: f.price, color: '#fbbf24', label: f.level}))}/>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:10}}>
+          <Box label="아래 가장 가까운 피보" value={below ? px(below.price) : '—'} color="#4ade80" sub={below ? `${below.kind} ${below.level} · ${pctTo(below.price)}` : null}/>
+          <Box label="위 가장 가까운 피보" value={above ? px(above.price) : '—'} color="#f87171" sub={above ? `${above.kind} ${above.level} · ${pctTo(above.price)}` : null}/>
+        </div>
+        <div style={{marginTop:10,fontSize:'.84rem'}}>
+          {ladder.map((l, k) => <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'5px 8px',borderRadius:6,
+            background: l.kind === 'now' ? '#1e3a8a' : 'transparent',fontWeight: l.kind === 'now' ? 800 : 500,color: l.kind === 'now' ? '#fff' : l.kind === '기준' ? '#cbd5e1' : l.kind === '확장' ? '#a78bfa' : '#fbbf24'}}>
+            <span>{l.kind === 'now' ? '▶ 현재가' : l.label}</span><span style={{fontFamily:'monospace'}}>{px(l.price)} {l.kind !== 'now' && <span style={{color:'#8794a8',fontWeight:500}}>{pctTo(l.price)}</span>}</span></div>)}
+        </div>
+        <Limit>스윙 고점·저점을 어디로 잡느냐에 따라 레벨이 달라집니다(여기서는 최근 {c.swingBars}봉의 최고·최저). 레벨은 지지·저항 "후보"이지 반드시 반응하는 가격이 아닙니다.</Limit>
+      </>;
+    }
+    if (lens === 'ew') {
+      if (!ew?.ok) return <>
+        <Headline id="ew">3대 규칙을 만족하는 최근 충격파 카운트가 없습니다 — 조정·횡보 구조일 수 있습니다.</Headline>
+        <Spark n={160} zig={(ew?.pts || []).slice(-7).map((p, k) => ({...p, wave: ''}))}/>
+        <Limit>엘리엇 파동은 같은 차트에도 여러 해석이 가능한 주관적 기법입니다.</Limit>
+      </>;
+      const first = ew.seq[0].i, n = Math.max(60, candles.length - first + 10);
+      return <>
+        <Headline id="ew">{ew.dir > 0 ? '상승' : '하락'} 충격파 후보 · <b>{ew.status}</b></Headline>
+        <Spark n={n} zig={ew.seq} lines={[{v: ew.invalid, color:'#f87171', label:'무효선'}, ...ew.targets.slice(0, 2).map(t => ({v: t.price, color:'#a78bfa', label:'목표'}))]}/>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:10}}>
+          <Box label={`무효화 가격 (${ew.invalidLabel})`} value={px(ew.invalid)} color="#f87171" sub={`현재가 대비 ${pctTo(ew.invalid)} · 넘어서면 이 카운트는 틀린 것`}/>
+          {ew.targets.map(t => <Box key={t.label} label={t.label} value={px(t.price)} color="#a78bfa" sub={pctTo(t.price)}/>)}
+        </div>
+        <div style={{fontSize:'.82rem',color:'#94a3b8',marginTop:10,lineHeight:1.7}}>
+          파동 비율: {ew.ratios.w2 != null && <>2파 되돌림 {(ew.ratios.w2 * 100).toFixed(0)}%</>}{ew.ratios.w3 != null && <> · 3파 = 1파 × {ew.ratios.w3.toFixed(2)}</>}{ew.ratios.w4 != null && <> · 4파 되돌림 {(ew.ratios.w4 * 100).toFixed(0)}%</>}
+          {' '}· 지그재그 기준 {(ew.r * 100).toFixed(1)}% 되돌림 (ATR × 3.5)
+        </div>
+        <Limit>규칙(2파 시작점 미이탈 · 3파 최단 아님 · 4파 1파 비겹침)만 확인한 기계적 후보입니다. 무작위로 만든 가격에서도 86%의 경우 이런 카운트가 나옵니다(300회 시험) — 카운트 자체는 예측 근거가 약하므로 <b>무효화 가격</b>을 손절 기준처럼 쓰는 정도로만 참고하세요.</Limit>
+      </>;
+    }
+    // cycle
+    if (!isCrypto) return <div style={{color:'#8794a8',fontSize:'.86rem'}}>사이클·거시 관점은 코인 분석에서만 제공합니다.</div>;
+    const d = macro.data, cy = d?.cyc || halvingCycle(Date.now()), W = 1460;
+    const xPct = dd => Math.min(100, dd / W * 100);
+    return <>
+      <Headline id="cycle">BTC 반감기({cy.lastHalving}) 후 {cy.day}일 — {cy.phase}</Headline>
+      <div style={{position:'relative',height:40,margin:'4px 0 6px'}}>
+        <div style={{position:'absolute',left:0,right:0,top:20,height:14,background:'#0b1220',border:'1px solid #334155',borderRadius:7}}/>
+        <div title="과거 사이클 고점 구간" style={{position:'absolute',top:20,height:14,left:`${xPct(cy.topWin[0])}%`,width:`${xPct(cy.topWin[1]) - xPct(cy.topWin[0])}%`,background:'#7f1d1d'}}/>
+        <div title="과거 사이클 바닥 구간" style={{position:'absolute',top:20,height:14,left:`${xPct(cy.bottomWin[0])}%`,width:`${xPct(cy.bottomWin[1]) - xPct(cy.bottomWin[0])}%`,background:'#14532d'}}/>
+        <div style={{position:'absolute',top:12,height:30,width:3,left:`calc(${xPct(cy.day)}% - 1px)`,background:'#fbbf24'}}/>
+        <div style={{position:'absolute',top:0,left:`${xPct(cy.day)}%`,transform:'translateX(-50%)',fontSize:'.74rem',color:'#fbbf24',fontWeight:800,whiteSpace:'nowrap'}}>지금 {cy.day}일</div>
+      </div>
+      <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:'.8rem',marginBottom:4}}>
+        <span><span style={{display:'inline-block',width:10,height:10,background:'#7f1d1d',marginRight:5}}/>과거 고점 {cy.topWin[0]}~{cy.topWin[1]}일</span>
+        <span><span style={{display:'inline-block',width:10,height:10,background:'#14532d',marginRight:5}}/>과거 바닥 {cy.bottomWin[0]}~{cy.bottomWin[1]}일</span>
+        <span style={{color:'#fbbf24'}}>▮ 지금 {cy.day}일</span>
+      </div>
+      <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:8}}>0일 = 반감기 · 막대 끝 = 약 4년(다음 반감기 {cy.nextHalving}) · 과거 사이클: {cy.past.map(p => `${p.halving.slice(0, 4)}년 반감기 → 고점 ${p.topDays}일·바닥 ${p.bottomDays}일`).join(' / ')}</div>
+      {macro.loading && <div style={{fontSize:'.84rem',color:'#8794a8'}}>BTC 주봉·외부 지표 불러오는 중...</div>}
+      {macro.error && <div style={{fontSize:'.84rem',color:'#f87171'}}>불러오지 못했습니다: {macro.error}</div>}
+      {d?.cyc && <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        {d.cyc.cycleTop && <Box label="이번 사이클 고점 (반감기 이후)" value={fmtPx(d.cyc.cycleTop.price, 'BTC')} sub={`${d.cyc.cycleTop.date} · 반감기 후 ${d.cyc.cycleTop.days}일`}/>}
+        {d.cyc.dd != null && <Box label="고점 대비 BTC" value={sgnPct(d.cyc.dd * 100)} color={d.cyc.dd < -0.2 ? '#f87171' : '#e2e8f0'} sub={`현재 ${fmtPx(d.cyc.btc, 'BTC')}`}/>}
+        <Box label={`BTC 200주선 (최근 ${d.cyc.ma200wN}주 평균)`} value={fmtPx(d.cyc.ma200w, 'BTC')} color={d.cyc.btc >= d.cyc.ma200w ? '#4ade80' : '#f87171'}
+             sub={`현재가 ${d.cyc.btc >= d.cyc.ma200w ? '위' : '아래'} (${sgnPct((d.cyc.btc / d.cyc.ma200w - 1) * 100)}) · 과거 약세장 바닥이 자주 형성된 선 (2022년엔 크게 하회)`}/>
+        {c.regime && !c.regime.unknown && <Box label="BTC 200일선" value={c.regime.btcAbove ? '위 (상승장)' : '아래 (하락장)'} color={c.regime.btcAbove ? '#4ade80' : '#f87171'} sub="앱 판정의 하락장 필터"/>}
+      </div>}
+      {d?.ext && <>
+        <div style={{fontWeight:800,fontSize:'.92rem',margin:'14px 0 6px'}}>대외 환경 (최근 6개월 일봉 · Yahoo)</div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          {d.ext.map(m => <Box key={m.t} label={`${m.label} · ${m.note}`} value={m.error ? '불러오지 못함' : fmtN(m.last)} color={m.error ? '#8794a8' : '#e2e8f0'}
+            sub={m.error ? null : <>1개월 <b style={{color: pnlCol(m.chg1m || 0)}}>{m.chg1m == null ? '—' : sgnPct(m.chg1m * 100)}</b> · 3개월 <b style={{color: pnlCol(m.chg3m || 0)}}>{m.chg3m == null ? '—' : sgnPct(m.chg3m * 100)}</b>
+              <br/>50일선 <b style={{color: m.aboveMa50 ? '#4ade80' : '#f87171'}}>{m.aboveMa50 == null ? '—' : m.aboveMa50 ? '위' : '아래'}</b> · BTC 상관 <b style={{color: m.corr != null && Math.abs(m.corr) >= 0.3 ? '#fbbf24' : '#cbd5e1'}}>{m.corr == null ? '—' : m.corr.toFixed(2)}</b></>}/>)}
+        </div>
+        <div style={{fontSize:'.78rem',color:'#8794a8',marginTop:6}}>BTC 상관 = 최근 90일 일간 수익률 상관계수(1 같이, −1 반대로 움직임). 절댓값 0.3 이상(노란색)이면 최근 BTC가 그 지표와 함께(또는 반대로) 움직이는 편입니다.</div>
+      </>}
+      <Limit>반감기 사이클은 과거 3번뿐인 표본이라 통계적 근거가 약하고, ETF·기관 자금 유입으로 패턴이 달라질 수 있습니다. 대외 지표와의 상관은 기간에 따라 바뀌며 인과관계가 아닙니다.</Limit>
+    </>;
+  })();
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <span>🧭 분석 관점 선택 <span style={{fontSize:'.8rem',color:'#8794a8',fontWeight:500}}>· {report.tfLabel || '일봉'} 기준</span></span>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(118px,1fr))',gap:6,marginBottom:14}}>
+        {LENSES.map(l => { const u = readUi(l.id), on = lens === l.id; return (
+          <button key={l.id} onClick={() => pick(l.id)} style={{textAlign:'left',padding:'8px 10px',borderRadius:8,cursor:'pointer',
+            border:`1px solid ${on ? '#60a5fa' : '#334155'}`,background: on ? '#1e3a8a' : '#0f172a'}}>
+            <div style={{fontSize:'.84rem',fontWeight:700,color: on ? '#fff' : '#cbd5e1'}}>{l.icon} {l.label}</div>
+            <div style={{fontSize:'.78rem',fontWeight:800,color:u.color,marginTop:2}}>{u.label}</div>
+          </button>); })}
+      </div>
+      {body}
+      {lens !== 'total' && <div style={{fontSize:'.78rem',color:'#8794a8',marginTop:8}}>매매 판정(롱·관망·회피)은 종합 점수로만 냅니다. 개별 관점의 해석은 과거 검증을 거치지 않은 참고용입니다.</div>}
+    </div>
+  );
+}
+
 function ReportHero({report, aiPending}) {
   if(!report) return null;
   const st = STANCE_UI[stanceOf(report)];
@@ -4441,7 +4848,7 @@ function AnalysisTab({apiKey, settings, serverHasKey, jump, onJumpDone, onOpenPo
             )}
           </div>
 
-          <div id="sec-tech"><AnalysisSection report={shown}/></div>
+          <div id="sec-tech"><LensCard key={'lens-'+shown.ticker+shown.tfId} report={shown}/><AnalysisSection report={shown}/></div>
 
           <DerivativesCard key={'d-'+shown.ticker} report={shown}/>
 
