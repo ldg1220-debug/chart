@@ -539,6 +539,7 @@ const BINANCE_SYMBOL_MAP = {
 const TIMEFRAMES = [
   {id:'5m',  label:'5분',  binanceInterval:'5m',  binanceLimit:288, yahooInterval:'5m',  yahooRange:'5d'},
   {id:'30m', label:'30분', binanceInterval:'30m', binanceLimit:336, yahooInterval:'30m', yahooRange:'1mo'},
+  {id:'1h',  label:'1시간', binanceInterval:'1h',  binanceLimit:300, yahooInterval:'60m', yahooRange:'1mo'},
   {id:'4h',  label:'4시간', binanceInterval:'4h',  binanceLimit:300, yahooInterval:'60m', yahooRange:'3mo'},
   {id:'1d',  label:'일봉',  binanceInterval:'1d',  binanceLimit:300, yahooInterval:'1d',  yahooRange:'2y'},
   {id:'1w',  label:'주봉',  binanceInterval:'1w',  binanceLimit:200, yahooInterval:'1wk', yahooRange:'5y'},
@@ -642,6 +643,7 @@ function roundNumbers(price) {
 const TF_PRESETS = {
   '5m':  {ma:[10,20,60],  rsi:7,  bb:10, swing:100, volScale:0.25, horizon:'초단기 (수 시간)',   setup:'데이 트레이드'},
   '30m': {ma:[10,20,60],  rsi:14, bb:20, swing:100, volScale:0.4,  horizon:'단기 (1~2일)',       setup:'데이 트레이드'},
+  '1h':  {ma:[20,60,120], rsi:14, bb:20, swing:100, volScale:0.55, horizon:'단기 (1~3일)',       setup:'데이 트레이드'},
   '4h':  {ma:[20,60,120], rsi:14, bb:20, swing:90,  volScale:0.8,  horizon:'단기 (수일~1주)',     setup:'스윙 트레이드'},
   '1d':  {ma:[20,50,200], rsi:14, bb:20, swing:90,  volScale:1,    horizon:'중기 (수주~3개월)',   setup:'스윙 트레이드'},
   '1w':  {ma:[5,20,60],   rsi:14, bb:20, swing:52,  volScale:2.2,  horizon:'장기 (수개월)',       setup:'포지션 트레이드'},
@@ -1206,7 +1208,7 @@ function summarizeGrades(logs, fee = 0) {
 // ─── 판정 엔진 워크포워드 백테스트 ───────────────────────────────────────────
 // 과거 각 시점 t에서 "t까지의 캔들만"으로 computeTechIndicators를 돌리고, 이후 캔들로 gradeLog 채점.
 // 앱 화면의 판정·매매 플랜·성과 채점과 같은 코드를 쓰므로 결과가 앱 동작과 일치한다.
-const BT_WINDOW = {'5m':288, '30m':336, '4h':300, '1d':365, '1w':200, '1M':60};
+const BT_WINDOW = {'5m':288, '30m':336, '1h':300, '4h':300, '1d':365, '1w':200, '1M':60};
 
 function verdictSampleAt(bars, t, opts) {
   const W = opts.window;
@@ -2369,7 +2371,15 @@ ${ctx.text}
 }
 
 // BTC 일봉 종가가 200일 이동평균 위인지 (진행 중 캔들 제외)
-async function fetchBtcRegime() {
+let _btcRegimeHit = null;   // {ts, p} — 5분 캐시 (거시·미시 패널이 타임프레임별로 동시에 호출)
+function fetchBtcRegime() {
+  if (_btcRegimeHit && Date.now() - _btcRegimeHit.ts < 300000) return _btcRegimeHit.p;
+  const p = _fetchBtcRegime();
+  _btcRegimeHit = {ts: Date.now(), p};
+  p.catch(() => { _btcRegimeHit = null; });
+  return p;
+}
+async function _fetchBtcRegime() {
   const d = await fetchOHLCV('BTC', '1y', 'crypto');
   const closes = d.slice(0, -1).map(x => x.close);
   if (closes.length < 200) throw new Error('BTC 데이터 부족');
@@ -2769,6 +2779,183 @@ const STANCE_UI = {
   image:   {label:'참고용',   sub:'이미지 AI 해설 · 판정 없음', icon:'🖼', color:'#94a3b8', bg:'#1e293b', border:'#334155'},
 };
 const stanceOf = r => r?.stance || (r?.position==='long' ? 'long' : 'neutral');
+
+// ─── 거시·미시 한눈에 (주봉·일봉 / 4시간·1시간) ─────────────────────────────────
+// 같은 지표 엔진을 타임프레임별로 돌려 나란히 보여준다. 판정 규칙으로 검증된 것은 일봉뿐이고,
+// 주봉·4시간·1시간 점수는 흐름 파악용 참고값이다 (진입·청산 규칙에 쓰지 않음).
+const MM_TFS = [
+  {id:'1w', group:'macro', label:'주봉',  horizon:'수개월'},
+  {id:'1d', group:'macro', label:'일봉',  horizon:'수주~3개월'},
+  {id:'4h', group:'micro', label:'4시간', horizon:'수일~1주'},
+  {id:'1h', group:'micro', label:'1시간', horizon:'1~3일'},
+];
+const mmDir = score => score == null ? null : score >= 25 ? 1 : score <= -25 ? -1 : 0;
+const MM_DIR_UI = {1: {label:'상승 우위', color:'#4ade80', bg:'#052e16'}, 0: {label:'중립', color:'#cbd5e1', bg:'#1e293b'}, [-1]: {label:'하락 우위', color:'#f87171', bg:'#450a0a'}};
+// 거시(일봉) × 미시(4시간·1시간 평균) 해석. 서술만 하고, 매매 여부는 검증된 일봉 판정을 따른다.
+const MM_CELLS = {
+  '1,1':   {t:'동반 상승',          d:'큰 흐름과 단기 흐름이 모두 위쪽입니다.'},
+  '1,0':   {t:'상승 중 숨고르기',    d:'큰 흐름은 위, 단기는 방향 없이 쉬는 중입니다.'},
+  '1,-1':  {t:'상승 중 단기 조정',   d:'큰 흐름은 위인데 단기적으로 밀리고 있습니다. 조정이 깊어지면 일봉 판정도 바뀔 수 있습니다.'},
+  '0,1':   {t:'단기 반등 시도',      d:'큰 흐름은 방향이 없고 단기만 오르고 있습니다.'},
+  '0,0':   {t:'방향 탐색',           d:'큰 흐름·단기 모두 뚜렷한 방향이 없습니다.'},
+  '0,-1':  {t:'단기 약세',           d:'큰 흐름은 방향이 없고 단기적으로 밀리고 있습니다.'},
+  '-1,1':  {t:'하락 중 단기 반등',   d:'큰 흐름은 아래인데 단기만 반등 중입니다. 반등이 추세 전환인지는 아직 알 수 없습니다.'},
+  '-1,0':  {t:'하락 중 횡보',        d:'큰 흐름은 아래, 단기는 멈춰 있습니다.'},
+  '-1,-1': {t:'동반 하락',           d:'큰 흐름과 단기 흐름이 모두 아래쪽입니다.'},
+};
+const _mmCache = {};
+async function fetchTfSnapshot(ticker, tfId) {
+  const k = ticker + '|' + tfId, hit = _mmCache[k];
+  if (hit && Date.now() - hit.ts < 120000) return hit.p;
+  const p = fetchAnalysisPhase1(ticker, 'crypto', tfId).then(p1 => ({price: p1.price, c: p1.computed}));
+  _mmCache[k] = {ts: Date.now(), p};
+  p.catch(() => { delete _mmCache[k]; });
+  return p;
+}
+
+function ScoreBar({score}) {
+  const v = Math.max(-100, Math.min(100, score || 0)), col = v >= 25 ? '#4ade80' : v <= -25 ? '#f87171' : '#94a3b8';
+  return (
+    <div style={{position:'relative',height:12,background:'#0b1220',border:'1px solid #334155',borderRadius:6,overflow:'hidden'}} title="지표 점수 −100 ~ +100 (±25가 판정 경계)">
+      <div style={{position:'absolute',top:0,bottom:0,background:col,borderRadius:4,
+        left: v >= 0 ? '50%' : `${50 + v/2}%`, width: `${Math.abs(v)/2}%`}}/>
+      {[37.5, 62.5].map(x => <div key={x} style={{position:'absolute',left:`${x}%`,top:0,bottom:0,width:1,background:'#475569'}}/>)}
+      <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:2,marginLeft:-1,background:'#94a3b8'}}/>
+    </div>
+  );
+}
+
+function MacroMicroCard({report}) {
+  const isCrypto = report?.market === 'crypto';
+  const ticker = report?.ticker;
+  const [view, setView] = React.useState(() => ls_get('cs_mm_view', 'all'));   // all | macro | micro
+  const [snaps, setSnaps] = React.useState({});
+  React.useEffect(() => {
+    if (!isCrypto || !ticker) return;
+    let alive = true;
+    const own = report.tfId && report.computed ? {[report.tfId]: {price: report.price, c: report.computed}} : {};
+    setSnaps(own);
+    MM_TFS.filter(t => !own[t.id]).forEach(t => {
+      fetchTfSnapshot(ticker, t.id)
+        .then(s => alive && setSnaps(prev => ({...prev, [t.id]: s})))
+        .catch(e => alive && setSnaps(prev => ({...prev, [t.id]: {error: e.message}})));
+    });
+    return () => { alive = false; };
+  }, [ticker, report?.tfId, report?.price]);
+  if (!isCrypto || !ticker) return null;
+  const pick = v => { setView(v); ls_set('cs_mm_view', v); };
+
+  const sc = id => snaps[id]?.c ? snaps[id].c.score : null;
+  const daily = snaps['1d']?.c;
+  const macroDir = mmDir(sc('1d'));
+  const microScores = ['4h', '1h'].map(sc).filter(v => v != null);
+  const microDir = microScores.length ? mmDir(microScores.reduce((a, b) => a + b, 0) / microScores.length) : null;
+  const regime = daily?.regime && !daily.regime.unknown ? daily.regime : null;
+  const st = daily ? STANCE_UI[daily.verdict.stance] : null;
+  const cell = macroDir != null && microDir != null ? MM_CELLS[`${macroDir},${microDir}`] : null;
+
+  const Row = ({t}) => {
+    const s = snaps[t.id], c = s?.c;
+    const d = c ? mmDir(c.score) : null, ui = d != null ? MM_DIR_UI[d] : null;
+    const validated = t.id === '1d';
+    return (
+      <div style={{padding:'10px 0',borderTop:'1px solid #1e293b'}}>
+        <div style={{display:'grid',gridTemplateColumns:'74px minmax(80px,1fr) auto',gap:10,alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:'.92rem'}}>{t.label}</div>
+            <div style={{fontSize:'.74rem',color:'#8794a8'}}>{t.horizon}</div>
+          </div>
+          {c ? <ScoreBar score={c.score}/> : <div style={{fontSize:'.8rem',color:'#8794a8'}}>{s?.error ? `불러오지 못함 (${s.error})` : '계산 중...'}</div>}
+          <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end',minWidth:118}}>
+            {c && <span style={{fontFamily:'monospace',fontWeight:800,color:ui.color,minWidth:36,textAlign:'right'}}>{c.score > 0 ? '+' : ''}{c.score}</span>}
+            {c && (validated && st
+              ? <span style={{fontSize:'.78rem',fontWeight:800,padding:'3px 8px',borderRadius:6,color:st.color,background:'#0f172a',border:`1px solid ${st.color}`}} title="검증된 판정 규칙">{st.icon} {st.label}</span>
+              : <span style={{fontSize:'.78rem',fontWeight:700,padding:'3px 8px',borderRadius:6,color:ui.color,background:ui.bg}} title="참고용 (판정 규칙으로 검증되지 않음)">{ui.label}</span>)}
+          </div>
+        </div>
+        {c && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:7,marginLeft:84,fontSize:'.76rem'}}>
+          {c.maSet.filter(m => m.v != null).map(m => {
+            const up = (s.price ?? c.price) >= m.v;
+            return <span key={m.n} title={`MA${m.n} ${fmtN(m.v)}`} style={{padding:'1px 7px',borderRadius:10,background: up ? '#052e16' : '#450a0a',color: up ? '#4ade80' : '#f87171'}}>MA{m.n} {up ? '위' : '아래'}</span>;
+          })}
+          {c.rsi14 != null && <span style={{padding:'1px 7px',borderRadius:10,background:'#1e293b',color: c.rsi14 >= 70 ? '#fb923c' : c.rsi14 <= 30 ? '#93c5fd' : '#cbd5e1'}}>RSI {c.rsi14.toFixed(0)}{c.rsi14 >= 70 ? ' 과열' : c.rsi14 <= 30 ? ' 과매도' : ''}</span>}
+          {c.macd?.hist != null && <span style={{padding:'1px 7px',borderRadius:10,background:'#1e293b',color: c.macd.hist >= 0 ? '#4ade80' : '#f87171'}}>MACD {c.macd.hist >= 0 ? '▲' : '▼'}</span>}
+          {!validated && <span style={{padding:'1px 7px',borderRadius:10,color:'#8794a8',border:'1px dashed #334155'}}>참고</span>}
+        </div>}
+      </div>
+    );
+  };
+
+  const Grid = () => (
+    <div style={{display:'grid',gridTemplateColumns:'auto repeat(3,1fr)',gap:3,fontSize:'.74rem',marginTop:4}}>
+      <div/>
+      {[1, 0, -1].map(m => <div key={m} style={{textAlign:'center',color:'#8794a8',padding:'2px 0'}}>미시 {MM_DIR_UI[m].label.replace(' 우위', '')}</div>)}
+      {[1, 0, -1].map(M => <React.Fragment key={M}>
+        <div style={{color:'#8794a8',display:'flex',alignItems:'center',paddingRight:4,whiteSpace:'nowrap'}}>거시 {MM_DIR_UI[M].label.replace(' 우위', '')}</div>
+        {[1, 0, -1].map(m => {
+          const on = M === macroDir && m === microDir;
+          const tone = M + m > 0 ? '#4ade80' : M + m < 0 ? '#f87171' : '#cbd5e1';
+          return <div key={m} style={{textAlign:'center',padding:'7px 4px',borderRadius:6,lineHeight:1.3,fontWeight: on ? 800 : 500,
+            background: on ? '#1e3a8a' : '#0f172a',border:`1px solid ${on ? '#60a5fa' : '#1e293b'}`,color: on ? '#fff' : tone, opacity: on ? 1 : 0.55}}>{MM_CELLS[`${M},${m}`].t}</div>;
+        })}
+      </React.Fragment>)}
+    </div>
+  );
+
+  const seg = on => ({padding:'4px 12px',border:'1px solid #334155',background:on?'linear-gradient(135deg,#3b82f6,#6366f1)':'#0f172a',color:on?'#fff':'#94a3b8',fontSize:'.8rem',fontWeight:600,borderRadius:0});
+  const groups = [
+    {key:'macro', title:'🌍 거시 — 큰 흐름 (수주~수개월)', sub:'추세가 살아 있는지'},
+    {key:'micro', title:'🔬 미시 — 단기 흐름 (수시간~수일)', sub:'지금 밀리는지, 오르는지'},
+  ];
+  return (
+    <div className="card">
+      <div className="card-title" style={{justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <span>🔭 거시 · 미시 한눈에</span>
+        <span style={{display:'inline-flex',borderRadius:6,overflow:'hidden'}}>
+          {[['all','둘 다'],['macro','거시'],['micro','미시']].map(([k, l]) => <button key={k} style={seg(view===k)} onClick={() => pick(k)}>{l}</button>)}
+        </span>
+      </div>
+
+      {view === 'all' && <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'stretch',marginBottom:6}}>
+        <div style={{flex:'1 1 260px',minWidth:0}}>
+          <div style={{fontSize:'.8rem',color:'#8794a8',marginBottom:4}}>지금 위치</div>
+          {cell ? <>
+            <div style={{fontSize:'1.15rem',fontWeight:900,color:'#e2e8f0'}}>{cell.t}</div>
+            <div style={{fontSize:'.84rem',color:'#cbd5e1',lineHeight:1.6,marginTop:4}}>{cell.d}</div>
+            {st && <div style={{fontSize:'.84rem',lineHeight:1.6,marginTop:8,padding:'8px 10px',borderRadius:8,background:'#172338',border:'1px solid #1e293b'}}>
+              매매 기준(검증된 일봉 판정): <b style={{color:st.color}}>{st.icon} {st.label}</b>
+              <span style={{color:'#94a3b8'}}> — {daily.verdict.stance === 'long' ? '규칙상 진입·보유 대상. 단기가 밀리는 중이면 분할 진입을 고려할 수 있습니다(미검증).' : daily.verdict.stance === 'bear' ? 'BTC 하락장 필터로 신규 롱 보류.' : '규칙상 신규 진입 대상이 아닙니다. 단기 반등만으로 들어가지 마세요.'}</span>
+            </div>}
+          </> : <div style={{fontSize:'.84rem',color:'#8794a8'}}>타임프레임별 계산 중...</div>}
+        </div>
+        <div style={{flex:'1 1 300px',minWidth:0}}><Grid/></div>
+      </div>}
+
+      {groups.filter(g => view === 'all' || view === g.key).map(g => (
+        <div key={g.key} style={{marginTop:12}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
+            <span style={{fontWeight:800,fontSize:'.95rem',color:'#e2e8f0'}}>{g.title}</span>
+            <span style={{fontSize:'.78rem',color:'#8794a8'}}>{g.sub}</span>
+          </div>
+          {MM_TFS.filter(t => t.group === g.key).map(t => <Row key={t.id} t={t}/>)}
+          {g.key === 'macro' && regime && (
+            <div style={{display:'grid',gridTemplateColumns:'74px 1fr',gap:10,alignItems:'center',padding:'10px 0',borderTop:'1px solid #1e293b'}}>
+              <div><div style={{fontWeight:800,fontSize:'.92rem'}}>BTC 장세</div><div style={{fontSize:'.74rem',color:'#8794a8'}}>코인 전체</div></div>
+              <div style={{fontSize:'.84rem'}}>
+                <b style={{color: regime.btcAbove ? '#4ade80' : '#f87171'}}>{regime.btcAbove ? '200일선 위 (상승장)' : '200일선 아래 (하락장)'}</b>
+                <span style={{color:'#8794a8'}}> · BTC {fmtN(regime.btcPrice)} / 200일선 {fmtN(regime.btcMa200)} ({sgnPct((regime.btcPrice / regime.btcMa200 - 1) * 100)})</span>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <div style={{fontSize:'.78rem',color:'#8794a8',lineHeight:1.6,marginTop:10}}>
+        막대 = 지표 점수(−100~+100, 가운데 선이 0, 옅은 눈금 ±25 안은 중립). 미시 방향은 4시간·1시간 점수 평균입니다.
+        판정 규칙으로 검증된 것은 <b style={{color:'#cbd5e1'}}>일봉</b>뿐이며, 주봉·4시간·1시간은 흐름 파악용 참고값입니다.
+      </div>
+    </div>
+  );
+}
 
 function ReportHero({report, aiPending}) {
   if(!report) return null;
@@ -4214,7 +4401,7 @@ function AnalysisTab({apiKey, settings, serverHasKey, jump, onJumpDone, onOpenPo
             ))}
           </nav>
 
-          <div id="sec-summary"><ReportHero report={shown} aiPending={aiLoading}/><TrackRecordCard report={shown}/></div>
+          <div id="sec-summary"><ReportHero report={shown} aiPending={aiLoading}/><MacroMicroCard key={'mm-'+shown.ticker} report={shown}/><TrackRecordCard report={shown}/></div>
 
           <div id="sec-chart">
             <div className="seg-tabs">
@@ -4581,7 +4768,7 @@ function regimeLookup(btcBars) {
   return t => m[key(t)] || null;
 }
 
-const TF_MINUTES = {'5m':5, '30m':30, '4h':240, '1d':1440, '1w':10080, '1M':43200};
+const TF_MINUTES = {'5m':5, '30m':30, '1h':60, '4h':240, '1d':1440, '1w':10080, '1M':43200};
 function spanLabel(tf, n) {
   const d = TF_MINUTES[tf] * n / 1440;
   return d >= 365 ? `약 ${(d/365).toFixed(1)}년` : d >= 30 ? `약 ${Math.round(d/30)}개월` : `약 ${Math.max(1, Math.round(d))}일`;
