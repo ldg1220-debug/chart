@@ -33,7 +33,8 @@ function loadEngine() {
   parts.push(src.slice(a, src.indexOf('\n}\n', b) + 3));
   const names = ['TIMEFRAMES','TF_PRESETS','EMPIRICAL_CRYPTO_1D','GRADE_RULES','TRAIL_MULT','BT_WINDOW','computeTechIndicators',
     'decideStance','buildTrailPlan','buildPositionAdvice','prepareCandles','buildLocalReport','gradeLog','trailTrade',
-    'summarizeGrades','verdictSampleAt','summarizeBacktest','simulateEquity','equityMetrics','netR','feeInR'];
+    'summarizeGrades','verdictSampleAt','summarizeBacktest','simulateEquity','equityMetrics','netR','feeInR',
+    'zigzagPivots','elliottCount','halvingCycle','liqPrice'];
   const exportsLine = `module.exports = {${names.map(n => `${n}: typeof ${n} !== 'undefined' ? ${n} : undefined`).join(', ')}};`;
   fs.mkdirSync(path.dirname(OUT), {recursive: true});
   fs.writeFileSync(OUT, parts.join('\n\n') + '\n\n' + exportsLine + '\n');
